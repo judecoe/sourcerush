@@ -19,10 +19,12 @@ export const roomsSchema: CollectionSchema = {
       storage: 'text',
       interpretation: {
         kind: 'select',
-        options: ['generating', 'lobby', 'question', 'reveal', 'finished'],
+        options: ['generating', 'lobby', 'question', 'reveal', 'finished', 'failed'],
       },
       required: true,
     },
+    // Set only when status is 'failed'. Safe to show players: no answer data.
+    { name: 'errorMessage', storage: 'text', interpretation: 'plain' },
     { name: 'sourceTitle', storage: 'text', interpretation: 'plain' },
     // -1 means no question has been opened yet.
     { name: 'currentIndex', storage: 'number', interpretation: 'plain', default: -1 },

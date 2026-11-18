@@ -13,6 +13,11 @@ import { settingsSchema } from './schemas/admin-schema'
 import { roomsSchema } from './schemas/rooms-schema'
 import { playersSchema } from './schemas/players-schema'
 import { teamMembersSchema } from './schemas/team-members-schema'
+import { questionsSchema } from './schemas/questions-schema'
+import { answerKeysSchema } from './schemas/answer-keys-schema'
+import { sourcesSchema } from './schemas/sources-schema'
+import { submissionsSchema } from './schemas/submissions-schema'
+import { revealLocksSchema } from './schemas/reveal-locks-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
@@ -20,4 +25,9 @@ export const schemas: CollectionSchema[] = [
   roomsSchema,
   playersSchema,
   teamMembersSchema,
+  questionsSchema,
+  answerKeysSchema,
+  sourcesSchema,
+  submissionsSchema,
+  revealLocksSchema,
 ]
