@@ -10,6 +10,8 @@ import type { Env } from '../../worker'
 import { parseCreateRoomParams } from '../lib/create-room-params'
 import { SAMPLE_PIPELINE_DEPS } from '../lib/questions/fixtures'
 import { runQuestionPipeline, USER_MESSAGES } from '../lib/questions/pipeline'
+import { stepValue } from '../lib/generation-steps'
+import { membershipsToRetire } from '../lib/room-age'
 import { QUESTION_DURATION_MS, scoreFor } from '../lib/scoring'
 import {
   failRoom,
@@ -53,6 +55,42 @@ function addMember(tools: ActionTools, roomId: string, userId: string) {
     { teamId: roomId, userId, status: 'active' },
     memberRecordId(roomId, userId),
   )
+}
+
+/**
+ * Set status 'left' on the caller's memberships older than
+ * ACTIVE_ROOM_MAX_AGE_MS (at most RETIRE_BATCH per call, oldest first).
+ *
+ * The SDK's 'team' read rule binds one SQL parameter per *active* membership,
+ * and SQLite allows 100, so a user in ~97 rooms couldn't load the room page
+ * (see src/lib/room-age.ts). A retired row keeps its id, so the membership
+ * checks in joinRoom/revealQuestion (which test that the row exists) are
+ * unchanged; only read access to that old room ends. Rooms the caller
+ * created stay readable to them via the SDK's `_created_by` clause.
+ *
+ * Best effort: failures are logged and never block the calling action.
+ */
+async function retireOldMemberships(tools: ActionTools, userId: string): Promise<void> {
+  const result = await tools.query('team_members', {
+    where: { userId, status: 'active' },
+    orderBy: 'createdAt',
+    orderDir: 'asc',
+    limit: ROOM_QUERY_LIMIT,
+  })
+  if (!result.success) {
+    console.error(`[retireOldMemberships] query failed: ${result.error}`)
+    return
+  }
+  const old = membershipsToRetire((result.data as QueryActionData).records, Date.now())
+  let retired = 0
+  for (const membership of old) {
+    const updated = await tools.update('team_members', membership.recordId, { status: 'left' })
+    if (updated.success) retired++
+    else console.error(`[retireOldMemberships] ${membership.recordId}: ${updated.error}`)
+  }
+  if (old.length > 0) {
+    console.log(`[retireOldMemberships] retired ${retired} of ${old.length} (active before: ${(result.data as QueryActionData).records.length})`)
+  }
 }
 
 /**
@@ -175,6 +213,9 @@ export const actions: Record<string, ActionHandler<Env>> = {
     const request = parseCreateRoomParams(params)
     if (!request.ok) return { success: false, error: request.error }
 
+    // Keep the caller's active memberships few (SDK read-query limit).
+    await retireOldMemberships(tools, userId)
+
     // 2. A link or topic costs owner credits: claim one of today's slots first.
     if (request.kind !== 'sample' && !(await claimRoomSlot(tools, userId))) {
       return {
@@ -202,6 +243,11 @@ export const actions: Record<string, ActionHandler<Env>> = {
           sourceUrl: '',
           currentIndex: -1,
           answeredCount: 0,
+          // First step for the progress list; the job advances it. The sample
+          // skips straight to 'lobby', so it has none.
+          ...(request.kind === 'sample'
+            ? {}
+            : { generationStep: stepValue(request.kind === 'topic' ? 'topic' : 'link', 'searching') }),
         },
         roomId,
       )
@@ -273,6 +319,9 @@ export const actions: Record<string, ActionHandler<Env>> = {
       return { success: false, error: 'Room codes are 6 characters.' }
     }
 
+    // Keep the caller's active memberships few (SDK read-query limit).
+    await retireOldMemberships(tools, userId)
+
     const found = await tools.query('rooms', { where: { code }, limit: 1 })
     if (!found.success) {
       console.error(`[joinRoom] room lookup failed: ${found.error}`)
@@ -283,8 +332,19 @@ export const actions: Record<string, ActionHandler<Env>> = {
     const roomId = room.recordId
 
     // 1. Existing member? Return the room regardless of its status.
+    // A retired membership (status 'left', see retireOldMemberships) is made
+    // active again, so the rejoining user can read the room.
     const existing = await tools.get('team_members', memberRecordId(roomId, userId))
-    if (existing.success) return { success: true, data: { roomId } }
+    if (existing.success) {
+      if ((existing.data as GetActionData).record.data.status !== 'active') {
+        const reactivated = await tools.update('team_members', memberRecordId(roomId, userId), { status: 'active' })
+        if (!reactivated.success) {
+          console.error(`[joinRoom] reactivating membership failed for room ${roomId}: ${reactivated.error}`)
+          return { success: false, error: 'Could not join that room. Please try again.' }
+        }
+      }
+      return { success: true, data: { roomId } }
+    }
     if (!existing.error.startsWith(RECORD_NOT_FOUND)) {
       console.error(`[joinRoom] membership lookup failed: ${existing.error}`)
       return { success: false, error: 'Could not join that room. Please try again.' }

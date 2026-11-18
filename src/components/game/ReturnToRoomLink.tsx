@@ -6,7 +6,7 @@
  * limits it to rooms the caller is a member of (or created). It can't
  * express "status not in (finished, failed)", so we filter here.
  *
- * Rooms created more than ROOM_LINK_MAX_AGE_MS ago are ignored, so an
+ * Rooms created more than ACTIVE_ROOM_MAX_AGE_MS ago are ignored, so an
  * abandoned game stops showing the link. That's display only: the room
  * itself keeps its status.
  *
@@ -20,10 +20,8 @@
 
 import { Link } from 'react-router-dom'
 import { useQuery } from 'deepspace'
+import { ACTIVE_ROOM_MAX_AGE_MS } from '@/lib/room-age'
 import type { Room } from './types'
-
-/** Rooms older than this (by createdAt) never show the link. */
-const ROOM_LINK_MAX_AGE_MS = 2 * 60 * 60 * 1000
 
 export function ReturnToRoomLink() {
   const rooms = useQuery<Room>('rooms', { orderBy: 'createdAt', orderDir: 'desc', limit: 20 })
@@ -31,7 +29,7 @@ export function ReturnToRoomLink() {
   // Sort again on the client so live inserts can't change "most recent".
   // createdAt is an ISO timestamp, so string order is time order.
   const newestFirst = [...rooms.records].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-  const cutoff = Date.now() - ROOM_LINK_MAX_AGE_MS
+  const cutoff = Date.now() - ACTIVE_ROOM_MAX_AGE_MS
   const active = newestFirst.find(
     (r) =>
       r.data.status !== 'finished' &&
@@ -47,10 +45,10 @@ export function ReturnToRoomLink() {
       <Link
         to={`/room/${active.data.roomId}`}
         data-testid="return-to-room"
-        className="mb-8 flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 text-sm hover:bg-accent"
+        className="mb-8 flex items-center justify-between rounded-lg border-2 border-input bg-card px-4 py-3 text-sm shadow-card transition-tone hover:border-primary hover:bg-accent"
       >
         <span className="font-medium">Return to your room</span>
-        <span className="font-mono tracking-widest">{active.data.code}</span>
+        <span className="font-mono font-bold tracking-widest text-highlight">{active.data.code}</span>
       </Link>
     </>
   )

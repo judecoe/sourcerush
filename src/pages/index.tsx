@@ -36,12 +36,14 @@ export default function Landing() {
     <>
       <Seo {...seo} path="/" />
       <div data-testid="static-landing" className="mx-auto max-w-md px-4 py-12 text-foreground">
-        <p className="mb-3 text-sm uppercase tracking-widest text-muted-foreground">{APP_NAME}</p>
-        <h1 className="mb-8 text-3xl font-bold tracking-tight">
-          Turn any article into a live quiz, with the source passage behind every answer.
-        </h1>
+        <div className="animate-enter-hero">
+          <p className="mb-3 font-display text-sm font-bold uppercase tracking-widest text-primary">{APP_NAME}</p>
+          <h1 className="mb-8 text-3xl font-bold tracking-tight">
+            Turn any article into a live quiz, with the source passage behind every answer.
+          </h1>
+        </div>
 
-        <div className="space-y-3">
+        <div className="animate-enter-hero enter-delay-1 space-y-3">
           <Link to="/create" className={buttonVariants({ className: 'w-full' })}>
             Create a room
           </Link>
@@ -50,20 +52,20 @@ export default function Landing() {
           </Link>
         </div>
 
-        <div className="mt-8 border-t border-border pt-6">
+        <div className="animate-enter-hero enter-delay-1 mt-8 border-t border-border pt-6">
           <Link to="/home" className={buttonVariants({ variant: 'outline', className: 'w-full' })}>
             Play a sample game →
           </Link>
           <p className="mt-2 text-sm text-muted-foreground">A short sample article. Play it on your own.</p>
         </div>
 
-        <h2 className="mb-3 mt-10 text-lg font-semibold">How it works</h2>
-        <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
+        <h2 className="animate-enter-hero enter-delay-2 mb-3 mt-10 text-lg font-semibold">How it works</h2>
+        <ol className="animate-enter-hero enter-delay-2 list-decimal space-y-2 pl-5 text-sm text-muted-foreground marker:font-mono marker:text-primary">
           {HOW_IT_WORKS.map((step) => (
             <li key={step}>{step}</li>
           ))}
         </ol>
-        <p className="mt-4 text-sm text-muted-foreground">
+        <p className="animate-enter-hero enter-delay-2 mt-4 text-sm text-muted-foreground">
           Play alone, or share the room code so friends can join.
         </p>
       </div>

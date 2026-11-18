@@ -9,6 +9,7 @@
  */
 
 import type { ActionTools } from 'deepspace/worker'
+import type { GenerationStepValue } from '../lib/generation-steps'
 import { GENERATE_TIMEOUT_MS, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS } from '../lib/generation-timing'
 import { USER_MESSAGES, type GenerateResult, type PipelineResult, type ScrapeResult } from '../lib/questions/pipeline'
 import {
@@ -57,6 +58,20 @@ export async function failRoom(tools: ActionTools, roomId: string, errorMessage:
   const failed = await tools.update('rooms', roomId, { status: 'failed', errorMessage })
   if (!failed.success) {
     console.error(`[generate] room ${roomId}: could not mark failed: ${failed.error}`)
+  }
+}
+
+/**
+ * Record which generation step the job is on, for the room page's progress
+ * list. Display only and best effort: a failed write is logged and the job
+ * carries on (the page then shows the previous step).
+ */
+export async function setGenerationStep(tools: ActionTools, roomId: string, step: GenerationStepValue): Promise<void> {
+  try {
+    const updated = await tools.update('rooms', roomId, { generationStep: step })
+    if (!updated.success) console.warn(`[generate] room ${roomId}: could not record step ${step}: ${updated.error}`)
+  } catch (err) {
+    console.warn(`[generate] room ${roomId}: could not record step ${step}: ${err instanceof Error ? err.message : String(err)}`)
   }
 }
 

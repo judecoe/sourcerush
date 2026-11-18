@@ -1,10 +1,8 @@
 /*
  * Theme overrides — applied via <html data-theme="<id>">.
  *
- * Default values live in `styles.css` (@theme block, slate — a neutral
- * placeholder, not a design choice). Every app should define its OWN theme
- * before first deploy: copy the example block below, rename the selector,
- * and set colors that fit the product. Shape comes from `--radius`.
+ * Default values live in `styles.css` (@theme block: the SourceRush theme).
+ * This file only holds optional overrides. Shape comes from `--radius`.
  *
  * To add a theme:
  *   1. Add a `[data-theme="my-id"] { ... }` block overriding the shadcn

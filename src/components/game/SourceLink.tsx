@@ -22,7 +22,7 @@ export function SourceLink({ room }: { room: Room }) {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className="underline underline-offset-4 hover:text-foreground"
+          className="text-primary underline underline-offset-4 transition-tone hover:text-foreground"
         >
           {room.sourceTitle}
         </a>

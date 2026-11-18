@@ -1,4 +1,5 @@
 import type { CollectionSchema } from 'deepspace/schema'
+import { GENERATION_STEP_VALUES } from '../lib/generation-steps'
 
 /**
  * A game room. Only server actions write here; only room members can read.
@@ -34,6 +35,15 @@ export const roomsSchema: CollectionSchema = {
     // Epoch milliseconds, server clock. Empty until a question is open.
     { name: 'endsAt', storage: 'number', interpretation: 'plain' },
     { name: 'answeredCount', storage: 'number', interpretation: 'plain', default: 0 },
+    // Display only: where question generation is while status is
+    // 'generating' (`${kind}:${step}`, src/lib/generation-steps.ts). Set by
+    // createRoom and the job; an enum, never the topic, URL or article text.
+    // Empty for the sample. Optional, so existing rows need no migration.
+    {
+      name: 'generationStep',
+      storage: 'text',
+      interpretation: { kind: 'select', options: [...GENERATION_STEP_VALUES] },
+    },
   ],
   uniqueOn: ['code'],
   teamField: 'roomId',

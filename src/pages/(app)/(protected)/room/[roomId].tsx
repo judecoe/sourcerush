@@ -13,7 +13,8 @@
 import type { ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useAuth, useMutations, useQuery } from 'deepspace'
-import { useAutoReveal, useGeneratingTooLong, useMsLeft } from '@/components/game/hooks'
+import { useAutoReveal, useGeneratingTooLong, useJustFinishedGenerating, useMsLeft } from '@/components/game/hooks'
+import { GeneratingStatus } from '@/components/game/GeneratingStatus'
 import { Leaderboard } from '@/components/game/Leaderboard'
 import { Lobby } from '@/components/game/Lobby'
 import { SourceLink } from '@/components/game/SourceLink'
@@ -37,6 +38,7 @@ export default function RoomPage() {
   })
   const room = rooms.records[0]?.data
   const generatingTooLong = useGeneratingTooLong(rooms.records[0]?.createdAt, room?.status === 'generating')
+  const justFinishedGenerating = useJustFinishedGenerating(room?.status)
 
   // The current question (its id is `${roomId}:${index}`, same as the server).
   const index = room?.currentIndex ?? -1
@@ -69,9 +71,9 @@ export default function RoomPage() {
     body = <p className="text-muted-foreground">Loading room…</p>
   } else if (!room) {
     body = (
-      <div data-testid="not-member" className="rounded-lg border border-border bg-card p-6">
+      <div data-testid="not-member" className="rounded-lg border border-border bg-card p-6 shadow-card">
         <p className="font-semibold">You're not in this room.</p>
-        <Link to="/join" className="mt-2 inline-block text-sm underline underline-offset-4">
+        <Link to="/join" className="mt-2 inline-block text-sm text-primary underline underline-offset-4">
           Join with a code
         </Link>
       </div>
@@ -79,7 +81,7 @@ export default function RoomPage() {
   } else if (room.status === 'generating' && generatingTooLong) {
     // The job may still finish; if it does, this page moves to the lobby by itself.
     body = (
-      <div data-testid="generating-too-long" className="rounded-lg border border-border bg-card p-6">
+      <div data-testid="generating-too-long" className="rounded-lg border border-border bg-card p-6 shadow-card">
         <p className="font-semibold">This is taking longer than expected.</p>
         <p className="mt-2 text-sm text-muted-foreground">
           The questions may still arrive, and this page will update if they do. Or start again with another
@@ -89,20 +91,23 @@ export default function RoomPage() {
       </div>
     )
   } else if (room.status === 'generating') {
-    body = <p data-testid="generating">Generating questions…</p>
+    body = <GeneratingStatus generationStep={room.generationStep} createdAt={rooms.records[0]?.createdAt} />
   } else if (room.status === 'failed') {
     body = (
-      <div data-testid="failed" className="rounded-lg border border-destructive p-6">
+      <div data-testid="failed" className="rounded-lg border-2 border-destructive bg-card p-6">
         <p className="font-semibold">This room couldn't be set up.</p>
         <p className="mt-2 text-sm">{room.errorMessage || 'Something went wrong.'}</p>
         {hostNewGameLink}
       </div>
     )
+  } else if (room.status === 'lobby' && justFinishedGenerating) {
+    // A moment with every step ticked before the lobby appears.
+    body = <GeneratingStatus generationStep={room.generationStep} createdAt={rooms.records[0]?.createdAt} complete />
   } else if (room.status === 'lobby') {
     body = <Lobby room={room} players={players.records} userId={userId} isHost={isHost} ready={ready} />
   } else if (room.status === 'finished') {
     body = (
-      <div data-testid="finished" className="space-y-6">
+      <div data-testid="finished" className="animate-enter space-y-6">
         <div className="space-y-2">
           <h1 className="text-2xl font-bold">Game over</h1>
           <SourceLink room={room} />

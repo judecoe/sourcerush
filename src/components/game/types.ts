@@ -16,6 +16,8 @@ export type Room = {
   currentIndex: number
   endsAt?: number
   answeredCount?: number
+  /** `${kind}:${step}` while generating (src/lib/generation-steps.ts). Display only. */
+  generationStep?: string
 }
 
 export type Player = {

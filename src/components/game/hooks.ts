@@ -45,6 +45,47 @@ export function useGeneratingTooLong(createdAt: string | undefined, generating: 
   return generating && deadline !== undefined && now >= deadline
 }
 
+/**
+ * Whole seconds since `createdAt` (server time) by this device's clock,
+ * ticking once a second while `running`. Display only.
+ */
+export function useElapsedSeconds(createdAt: string | undefined, running: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!running) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [running])
+
+  const start = createdAt ? new Date(createdAt).getTime() : NaN
+  return Number.isFinite(start) ? Math.max(0, Math.floor((now - start) / 1000)) : 0
+}
+
+/**
+ * True for `ms` after the room goes from 'generating' to 'lobby' while this
+ * page is open, so the progress list can show every step ticked ("Quiz
+ * ready") before the lobby replaces it. Display only. A page that first sees
+ * the room in 'lobby' (e.g. the sample, or a refresh) never holds.
+ */
+export function useJustFinishedGenerating(status: string | undefined, ms = 900): boolean {
+  // Previous status kept in state (React's "adjust state on prop change" pattern).
+  const [prevStatus, setPrevStatus] = useState(status)
+  const [holding, setHolding] = useState(false)
+  if (status !== prevStatus) {
+    setPrevStatus(status)
+    if (prevStatus === 'generating' && status === 'lobby') setHolding(true)
+  }
+
+  useEffect(() => {
+    if (!holding) return
+    const timer = setTimeout(() => setHolding(false), ms)
+    return () => clearTimeout(timer)
+  }, [holding, ms])
+
+  return holding
+}
+
 const REVEAL_ATTEMPTS = 5
 const REVEAL_RETRY_MS = 1_000
 

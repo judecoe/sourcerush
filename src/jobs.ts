@@ -13,6 +13,10 @@
  *   For a topic room, a too-short or unreachable article fails with
  *   USER_MESSAGES.topicArticleUnusable instead (topicRoomResult).
  *   The topic is never logged.
+ *   Before each step it records `rooms.generationStep` (topic:searching is
+ *   set by createRoom; then reading, writing, checking once a reply arrives,
+ *   rewriting on a second generation, and saving before the questions are
+ *   stored), which the room page shows as a progress list.
  *
  * It acts as the room's host, so every row it creates has the same
  * `_created_by` as when createRoom did this work inline. It only creates
@@ -28,6 +32,7 @@
 import type { Job, JobContext } from 'deepspace/worker'
 import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../worker.js'
+import { stepValue } from './lib/generation-steps.js'
 import { runQuestionPipeline, topicRoomResult, USER_MESSAGES } from './lib/questions/pipeline.js'
 import { createActionTools } from './server/action-routes.js'
 import {
@@ -37,6 +42,7 @@ import {
   GENERATE_JOB_TYPE,
   scrapeArticle,
   searchArticle,
+  setGenerationStep,
   type GenerateJobPayload,
 } from './server/generation.js'
 
@@ -86,11 +92,24 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
 
     let attempt = 0
     const kind = payload.topic !== undefined ? 'topic' : 'link'
+    // Each step is recorded just before it starts, for the room page's
+    // progress list (display only; see setGenerationStep).
     const pipelineResult = await runQuestionPipeline(
       url,
       {
-        scrape: (u) => scrapeArticle(tools, roomId, u),
-        generate: (system, user) => generateText(tools, roomId, ++attempt, system, user),
+        scrape: async (u) => {
+          await setGenerationStep(tools, roomId, stepValue(kind, 'reading'))
+          return scrapeArticle(tools, roomId, u)
+        },
+        generate: async (system, user) => {
+          attempt += 1
+          await setGenerationStep(tools, roomId, stepValue(kind, attempt === 1 ? 'writing' : 'rewriting'))
+          const generated = await generateText(tools, roomId, attempt, system, user)
+          // The pipeline parses and validates the reply next (checking every
+          // passage against the article). A failed call ends the room instead.
+          if (generated.ok) await setGenerationStep(tools, roomId, stepValue(kind, 'checking'))
+          return generated
+        },
       },
       kind,
     )
@@ -99,6 +118,7 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
 
     // Up to ~150 s have passed; don't overwrite a room that moved on.
     if (!(await stillGenerating(tools, roomId, hostId))) return
+    if (result.ok) await setGenerationStep(tools, roomId, stepValue(kind, 'saving'))
     const finished = await finishGeneration(tools, roomId, result, url)
     console.info(`[generate] room ${roomId}: done in ${Date.now() - started} ms -> ${finished?.status ?? 'status write failed'}`)
   } catch (err) {

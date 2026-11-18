@@ -6,94 +6,177 @@
 @source "../node_modules/deepspace/dist/**/*.js";
 
 /*
- * Theming — pure shadcn/ui CSS variables with [data-theme] selectors.
- *
- * The @theme block below holds the default theme (slate). All other themes
- * live in `themes.css` as `[data-theme="<id>"]` override blocks. Switching
- * themes = changing the data-theme attribute on <html> in index.html. No
- * JS, no FOUC.
- *
- * Status colors (success, warning, info) are intentionally NOT themed —
- * they stay consistent across every preset.
+ * Fonts — self-hosted from public/fonts/ (SIL OFL 1.1, see public/fonts/OFL.txt).
+ * Latin subsets only. No third-party font requests.
+ *   Space Grotesk: body text, question prompts, answer choices, passages.
+ *   Space Mono:    headings, short labels, buttons, room code, countdown, scores.
  */
-@theme {
-  /* shadcn core tokens — slate (default): neutral gray on near-black, indigo accent */
-  --color-background: #0a0a0a;
-  --color-foreground: #e8eaed;
-  --color-card: #161616;
-  --color-card-foreground: #e8eaed;
-  --color-popover: #161616;
-  --color-popover-foreground: #e8eaed;
-  --color-primary: #818cf8;
-  --color-primary-foreground: #ffffff;
-  --color-secondary: #1e1e1e;
-  --color-secondary-foreground: #e8eaed;
-  --color-muted: #1e1e1e;
-  --color-muted-foreground: #9ca3af;
-  --color-accent: #262626;
-  --color-accent-foreground: #e8eaed;
-  --color-destructive: #ef4444;
-  --color-destructive-foreground: #ffffff;
-  --color-border: rgba(60, 64, 67, 0.6);
-  --color-input: rgba(60, 64, 67, 0.6);
-  --color-ring: #818cf8;
-  --radius: 0.5rem;
-
-  /*
-   * Map the rounded-* utilities onto --radius so a theme (or you) can change
-   * the app's shape language in one place. At the default 0.5rem these equal
-   * Tailwind's stock values, so there is no visual change until a theme
-   * overrides --radius.
-   */
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --radius-2xl: calc(var(--radius) + 8px);
-
-  /* Status colors — constant across all themes */
-  --color-success: #10b981;
-  --color-success-foreground: #ffffff;
-  --color-warning: #f59e0b;
-  --color-warning-foreground: #ffffff;
-  --color-info: #3b82f6;
-  --color-info-foreground: #ffffff;
-
-  /*
-   * Shadows — slate (default). Each theme in themes.css tunes these.
-   *
-   * Toned down 2026-05: previous values were 8px/12px offset with
-   * 32px/40px blur which read as a heavy halo under every Card on
-   * the page. New values are Linear/Stripe-style: barely-there at
-   * rest, slightly more present on hover.
-   *
-   * IMPORTANT: starter components (`Card`, `Dialog`, `CardGrid`,
-   * `Navigation`, `Toast`) intentionally use literal shadow values
-   * via `shadow-[…]` arbitrary-value classes, NOT the
-   * `shadow-card` / `shadow-card-hover` token classes Tailwind v4
-   * generates from this @theme block. Why: Tailwind's @theme directive
-   * compiles these tokens into the utility-class definitions at build
-   * time, and runtime [data-theme] overrides don't always cancel the
-   * baked baseline cleanly — apps switching themes were getting the
-   * slate value carried forward on the compiled `shadow-card` class.
-   * Sidestepping the token system in starter components is the
-   * deterministic fix. See docs/platform/theming-shadows.md.
-   */
-  --shadow-card: 0 1px 2px 0 rgba(0, 0, 0, 0.12);
-  --shadow-card-hover: 0 2px 8px 0 rgba(0, 0, 0, 0.16);
-
-  /* Shell tokens: the area behind a multi-panel layout, and the raised
-     surface a page renders into. Used by templates whose (app)/_layout is a
-     shell (e.g. copilot's sidebar | panel | chat); a single-column layout
-     simply doesn't reference them. In every theme keep the panel reading as
-     elevated: dark → panel lighter than shell; light → white panel on a
-     faintly darker shell. */
-  --color-shell: #0a0a0a;
-  --color-shell-panel: #161616;
-
-  /* Animations */
-  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('/fonts/space-grotesk-latin-var.woff2') format('woff2');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
 }
+@font-face {
+  font-family: 'Space Mono';
+  src: url('/fonts/space-mono-latin-400.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Space Mono';
+  src: url('/fonts/space-mono-latin-700.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/*
+ * SourceRush design tokens — the ONE place for colour, font, radius, shadow
+ * and motion values. Components use the generated utilities (bg-primary,
+ * text-highlight, shadow-press, font-display, animate-enter, …) or var(--…).
+ *
+ * `static` makes Tailwind emit every variable, including the ones only read
+ * through var() (motion durations), not just those a utility class uses.
+ *
+ * Contrast (WCAG AA) was checked for every text/background pair:
+ * foreground and muted-foreground are ≥ 6:1 on background, card and accent;
+ * primary, highlight, success and destructive are ≥ 6:1 as text on
+ * background/card; each *-foreground is ≥ 7:1 on its fill. --color-input
+ * (control borders) is ≥ 3:1 on background and card.
+ *
+ * If you add a light theme in themes.css, include `color-scheme: light;` and
+ * add its background to the first-paint <style> in index.html.
+ */
+@theme static {
+  /* Surfaces — deep ink navy, getting lighter as they rise */
+  --color-background: #0b1426;
+  --color-background-top: #12213d; /* top of the page gradient (bg-page) */
+  --color-foreground: #e8eef8;
+  --color-card: #14223d;
+  --color-card-foreground: #e8eef8;
+  --color-popover: #14223d;
+  --color-popover-foreground: #e8eef8;
+  --color-secondary: #1a2a4a;
+  --color-secondary-foreground: #e8eef8;
+  --color-muted: #1a2a4a;
+  --color-muted-foreground: #a3b3cf;
+  --color-accent: #1f3257; /* hover surface */
+  --color-accent-foreground: #e8eef8;
+  --color-border: #2a3d63; /* dividers, decorative */
+  --color-input: #5874ab; /* control borders: 3:1+ against background and card */
+  --color-overlay: rgb(4 9 20 / 0.72); /* dialog backdrop */
+  --color-shell: #0b1426;
+  --color-shell-panel: #14223d;
+
+  /* Accents */
+  --color-primary: #5cd6ea; /* signal cyan */
+  --color-primary-foreground: #06121f;
+  --color-ring: #5cd6ea;
+  --color-highlight: #ff8aa1; /* coral: room code, scores, low countdown */
+  --color-highlight-foreground: #06121f;
+
+  /* Status */
+  --color-success: #5ee59a;
+  --color-success-foreground: #06121f;
+  --color-destructive: #ff7b7b;
+  --color-destructive-foreground: #06121f;
+  --color-warning: #ffc861;
+  --color-warning-foreground: #06121f;
+  --color-info: #7cb6ff;
+  --color-info-foreground: #06121f;
+
+  /* Type */
+  --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Shape — squarer, blockier. All rounded-* derive from --radius. */
+  --radius: 0.25rem;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 6px);
+
+  /* Shadows — Tailwind's stock scale is overridden so shadow-sm/md/lg match. */
+  --shadow-xs: 0 1px 0 0 rgb(0 0 0 / 0.3);
+  --shadow-sm: 0 1px 0 0 rgb(0 0 0 / 0.35);
+  --shadow-md: 0 8px 24px -12px rgb(0 0 0 / 0.6);
+  --shadow-lg: 0 16px 40px -16px rgb(0 0 0 / 0.7);
+  --shadow-press: 0 3px 0 0 rgb(0 0 0 / 0.45); /* hard block under buttons */
+  --shadow-press-active: 0 1px 0 0 rgb(0 0 0 / 0.45); /* pressed down */
+  --shadow-card: 0 12px 32px -16px rgb(92 214 234 / 0.18); /* faint cyan glow; cards keep their own border */
+  --shadow-card-hover: 0 12px 32px -14px rgb(92 214 234 / 0.26);
+  --shadow-overlay: 0 24px 64px -16px rgb(0 0 0 / 0.7);
+
+  /* Motion — one easing; durations by purpose. Reduced motion: see @layer base. */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --duration-fast: 90ms; /* button press */
+  --duration-base: 160ms; /* hover, focus, colour changes */
+  --duration-enter: 280ms; /* screen entry */
+  --duration-hero: 400ms; /* landing entry */
+  --duration-reveal: 520ms; /* reveal: the pick pops and fades to green/red */
+  --stagger: 80ms; /* landing entry delay step */
+  --duration-activity: 1400ms; /* one sweep of the generating activity bar */
+
+  --animate-enter: enter var(--duration-enter) var(--ease-out) both;
+  --animate-enter-hero: enter var(--duration-hero) var(--ease-out) both;
+  --animate-reveal-pick: reveal-pick var(--duration-reveal) var(--ease-out) 1;
+  --animate-reveal-answer: reveal-answer var(--duration-reveal) var(--ease-out) 1;
+  --animate-activity: activity var(--duration-activity) ease-in-out infinite;
+  --animate-pulse-glow: pulse-glow 2s ease-in-out infinite;
+
+  @keyframes enter {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+  /* Reveal keyframes give only the starting look (the locked-in state). With
+     no end keyframe the browser animates to the element's own classes
+     (border-success / border-destructive + tint), so reduced motion, which
+     cuts the duration to ~0, lands straight on the final colours. */
+  @keyframes reveal-pick {
+    0% { transform: scale(1); border-color: var(--color-primary); background-color: color-mix(in oklab, var(--color-primary) 10%, transparent); }
+    40% { transform: scale(1.03); }
+    100% { transform: scale(1); }
+  }
+  /* A segment sweeping across its track: activity, not a percentage. */
+  @keyframes activity {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(250%); }
+  }
+  @keyframes reveal-answer {
+    from { border-color: var(--color-border); background-color: transparent; }
+  }
+}
+
+/* Page background: a faint lift at the top, fading into the base navy. */
+@utility bg-page {
+  background-color: var(--color-background);
+  background-image: linear-gradient(180deg, var(--color-background-top) 0, var(--color-background) 28rem);
+  background-repeat: no-repeat;
+}
+
+/* The single press effect (Button): colours ease at --duration-base, the
+   shadow + 2px drop at --duration-fast. */
+@utility transition-press {
+  transition-property: background-color, border-color, color, box-shadow, transform, opacity;
+  transition-duration: var(--duration-base), var(--duration-base), var(--duration-base), var(--duration-fast), var(--duration-fast), var(--duration-base);
+  transition-timing-function: var(--ease-out);
+}
+
+/* Colour-only transition at --duration-base (countdown, links, inputs). */
+@utility transition-tone {
+  transition-property: color, background-color, border-color, box-shadow;
+  transition-duration: var(--duration-base);
+  transition-timing-function: var(--ease-out);
+}
+
+/* Landing entry stagger. */
+@utility enter-delay-1 { animation-delay: var(--stagger); }
+@utility enter-delay-2 { animation-delay: calc(var(--stagger) * 2); }
 
 /* Theme override blocks live in `themes.css` — imported above. */
 
@@ -164,7 +247,7 @@
   }
 
   body {
-    font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: var(--font-sans);
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -230,5 +313,29 @@
   /* Prevent 300ms tap delay on mobile */
   a, button, [role="button"], input, select, textarea {
     touch-action: manipulation;
+  }
+
+  /* Headings use the display (mono) face. Long headings such as question
+     prompts opt back into font-sans where they're rendered. */
+  h1, h2 {
+    font-family: var(--font-display);
+  }
+
+  /* Reduced motion: no entry/reveal animation, no transitions, no press drop.
+     Every animation ends at its resting state, so nothing stays hidden. */
+  @media (prefers-reduced-motion: reduce) {
+    html, body, #root {
+      scroll-behavior: auto;
+    }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      transition-delay: 0ms !important;
+    }
+    [data-slot="button"]:active, .transition-press:active {
+      transform: none !important;
+    }
   }
 }

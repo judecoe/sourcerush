@@ -1,10 +1,11 @@
 /**
  * Theme catalog.
  *
- * The scaffold ships two placeholder themes: `slate` (dark default, defined
- * in styles.css) and `paper` (light example, defined in themes.css). They
- * are scaffolding, not a design — give the app its own theme before first
- * deploy:
+ * `sourcerush` is the app's theme (dark, defined in the @theme block in
+ * styles.css). It replaced the scaffold's `slate` placeholder on 2026-11-18;
+ * nothing stores a theme choice, and an unknown data-theme value simply gets
+ * the @theme defaults, i.e. sourcerush. `paper` is the scaffold's light
+ * example (themes.css), unused. To add a theme:
  *   1. Add a `[data-theme="my-id"] { ... }` block in src/themes.css with
  *      the shadcn token overrides (include `color-scheme: light;` for
  *      light themes).
@@ -18,9 +19,9 @@
 
 export const THEMES = [
   {
-    id: 'slate',
-    label: 'Slate',
-    description: 'Neutral dark placeholder default. Replace with your own theme.',
+    id: 'sourcerush',
+    label: 'SourceRush',
+    description: 'Deep navy base, signal-cyan and coral accents, Space Grotesk + Space Mono.',
   },
   {
     id: 'paper',
@@ -33,9 +34,9 @@ export type ThemeId = (typeof THEMES)[number]['id']
 
 /** Read the currently active theme id from <html data-theme>. */
 export function getActiveTheme(): ThemeId {
-  if (typeof document === 'undefined') return 'slate'
+  if (typeof document === 'undefined') return 'sourcerush'
   const id = document.documentElement.getAttribute('data-theme') as ThemeId | null
-  return id ?? 'slate'
+  return id ?? 'sourcerush'
 }
 
 /** Look up a theme entry by id, or fall back to the first theme. */

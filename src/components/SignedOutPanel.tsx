@@ -20,7 +20,7 @@ export function SignedOutPanel() {
 
   return (
     <div className="flex min-h-[60vh] items-center justify-center px-6 py-20">
-      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-8 text-center">
+      <div className="w-full max-w-sm rounded-lg border border-border bg-card p-8 text-center shadow-card">
         <h1 className="text-lg font-semibold text-foreground">Sign in to continue</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           This page is only available to signed-in users.

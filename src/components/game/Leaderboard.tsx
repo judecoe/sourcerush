@@ -17,15 +17,15 @@ export function Leaderboard({ players, userId }: Props) {
   return (
     <section>
       <h2 className="mb-3 text-lg font-semibold">Leaderboard</h2>
-      <ol data-testid="leaderboard" className="divide-y divide-border rounded-lg border border-border">
+      <ol data-testid="leaderboard" className="divide-y divide-border rounded-lg border border-border bg-card shadow-card">
         {sorted.map((p, i) => (
           <li key={p.recordId} data-testid="leaderboard-row" className="flex items-center gap-3 px-4 py-3">
-            <span className="w-6 text-sm text-muted-foreground">{i + 1}</span>
+            <span className="w-6 font-mono text-sm text-muted-foreground">{i + 1}</span>
             <span className="flex-1 truncate">
               {p.data.displayName}
               {p.data.userId === userId ? ' (you)' : ''}
             </span>
-            <span data-testid="leaderboard-score" className="font-mono font-semibold">
+            <span data-testid="leaderboard-score" className="font-mono font-bold text-highlight">
               {p.data.score ?? 0}
             </span>
           </li>
