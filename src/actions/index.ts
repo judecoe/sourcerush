@@ -46,6 +46,18 @@ function addMember(tools: ActionTools, roomId: string, userId: string) {
   )
 }
 
+/**
+ * Mark a room 'failed' so it never sits in 'generating'. Uses the same
+ * `tools.update` call as createRoom's pipeline failure path. If this write
+ * fails too, the room stays in 'generating' and only the log records it.
+ */
+async function failRoom(tools: ActionTools, roomId: string, errorMessage: string): Promise<void> {
+  const failed = await tools.update('rooms', roomId, { status: 'failed', errorMessage })
+  if (!failed.success) {
+    console.error(`[createRoom] room ${roomId}: could not mark failed: ${failed.error}`)
+  }
+}
+
 /** Id of question number `index` in a room. Shared by `questions` and `answerKeys`. */
 function questionRecordId(roomId: string, index: number): string {
   return `${roomId}:${index}`
@@ -160,7 +172,12 @@ async function generateQuestions(
 export const actions: Record<string, ActionHandler<Env>> = {
   /**
    * Create a room with a fresh 6-character code, generate its questions, and
-   * move it to 'lobby'. The caller is the host: a room member, not a player.
+   * move it to 'lobby'. The caller is the host: a room member and also a
+   * player (they get a players row, like anyone who joins).
+   *
+   * If the host's team_members or players write fails, the room is marked
+   * 'failed' and the call returns an error (the host may not be able to read
+   * the room, so there's no room page to send them to).
    *
    * Status goes 'generating' → 'lobby', or 'generating' → 'failed' (with
    * `errorMessage`) if the pipeline can't produce enough questions or throws.
@@ -208,9 +225,23 @@ export const actions: Record<string, ActionHandler<Env>> = {
       console.warn(`[createRoom] code collision on attempt ${attempt}, retrying`)
     }
 
+    const setupFailed = 'Could not set up this room. Please try again.'
     const member = await addMember(tools, roomId, userId)
     if (!member.success) {
       console.error(`[createRoom] host membership failed for room ${roomId}: ${member.error}`)
+      await failRoom(tools, roomId, setupFailed)
+      return { success: false, error: 'Could not create a room. Please try again.' }
+    }
+
+    // The host plays too: same players row joinRoom creates.
+    const player = await tools.create(
+      'players',
+      { roomId, userId, displayName: await displayNameFor(tools, userId), score: 0 },
+      memberRecordId(roomId, userId),
+    )
+    if (!player.success) {
+      console.error(`[createRoom] host player row failed for room ${roomId}: ${player.error}`)
+      await failRoom(tools, roomId, setupFailed)
       return { success: false, error: 'Could not create a room. Please try again.' }
     }
 
@@ -344,7 +375,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
   },
 
   /**
-   * A player answers the open question. One answer per player per question:
+   * A player (the host included) answers the open question. One answer per player per question:
    * every submissions column is immutable and `attemptId` is new on every
    * call, so a second create for the same id is rejected by the SDK inside a
    * single write, even when two calls race.
@@ -396,8 +427,8 @@ export const actions: Record<string, ActionHandler<Env>> = {
   },
 
   /**
-   * Any room member. Allowed once time is up (server clock) or every player
-   * has answered (counted server-side). The first call to create the
+   * Any room member. Allowed once time is up (server clock) or every player,
+   * the host included, has answered (counted server-side). The first call to create the
    * question's reveal_locks row does the scoring; any other call gets
    * `alreadyRevealed: true` and changes nothing.
    */

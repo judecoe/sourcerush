@@ -144,3 +144,37 @@ Verified (local dev):
 Not verified / risks:
 - Two runs is a small sample for a flake that showed up in 3 of 3 runs before; the account split is the explanation that fits, but I did not re-instrument to prove the client re-query is gone.
 - The earlier root cause (why a concurrent session of the same account makes the client re-query) is still not found.
+
+## 2026-11-17 — The host is also a player
+
+Did:
+- `src/actions/index.ts`:
+  - `createRoom` now also creates the host's `players` row (`${roomId}:${hostId}`, score 0, `displayName` from the server-side `users` row), using the same call as `joinRoom`. It is written after the host's `team_members` row and before the question pipeline.
+  - New `failRoom(tools, roomId, errorMessage)`. If the host's `team_members` or `players` write fails, it sets `status: 'failed'` + `errorMessage: 'Could not set up this room. Please try again.'`, and `createRoom` returns `{ success: false, error: 'Could not create a room. Please try again.' }`. Before this change a failed membership write returned the same error but left the room in `generating`.
+  - `failRoom` uses `tools.update('rooms', …)`, the same call the pipeline failure path uses. The pipeline path was **not** switched to `failRoom`: its single `tools.update` sets either `lobby` or `failed` and returns an error if it fails, so switching would mean splitting that write. That was more than a few lines, so I left it.
+  - `submitAnswer`: no code change. There was never a host-specific rejection; the host was refused only because they had no `players` row.
+  - `revealQuestion` and scoring: no code change. Both already loop over all `players` rows, so the host is now scored, and the "everyone answered" early close now waits for the host (intended). `openQuestion` stays host-only.
+  - Only doc comments changed beyond that.
+- `tests/game.spec.ts`:
+  - Removed the "host can't answer" assertion. Instead it checks that the host's `players` row exists with score 0 and that there are 3 players.
+  - `player-count` is now 3.
+  - In step 5, before the host answers, an early `revealQuestion` is refused with "The round is still open."
+  - The host then submits the correct answer. p1 and p2 read 0 of the host's submissions, and the host's score equals `scoreFor(true, hostSubmittedAt, endsAt)` (> 500, so a double score would show).
+- `tests/lobby.spec.ts`, `tests/membership-resubscribe.spec.ts`: host/player `player-count` expectations +1 (outsider/watching-before-join stay 0); lobby header comment.
+- `CLAUDE.md`: host is a player (architecture paragraph, `createRoom` incl. `failRoom`, status line, `revealQuestion` count includes host, testing line).
+
+Verified (local dev):
+- `npx tsc --noEmit`: clean. `npx vitest run`: 22/22.
+- `npx deepspace test run all` (the two requested runs, plus a third):
+  - Run 1: 17 passed. In `game.spec` the host scored 919 (p1 956, p2 921). 6 concurrent reveals → 1 scorer, 5 `alreadyRevealed` by lock.
+  - Run 2: 16 passed, 1 failed: `collab.spec.ts:65` (scaffold API-status test, "Loading integration catalog..." not visible within 5s). This is the same flake recorded in an earlier entry. The page doesn't touch rooms or players.
+  - Run 3: 17 passed.
+- `membership-resubscribe.spec.ts` failed as expected (`test.fail()`) in all 3 runs. In runs 2 and 3 I read `error-context.md`: it failed at line 54, where the already-subscribed tab showed "1" and "3" was expected, i.e. only its own row (the SDK bug). Line 50 (fresh join tab = "3") passed first, so this is not a count mismatch. Run 1's context file was overwritten before I read it.
+- `git grep --untracked -n -i "password" -- src tests`: 5 hits, all `--password-stdin` instructions or a comment about where passwords live; no secrets.
+
+Not verified / risks:
+- **The setup-failure path (`failRoom` after a failed `team_members` or `players` write) is verified by reading the code only.** No test forces those writes to fail; that would need another test hook like `fixture: 'broken'`.
+- If the `failRoom` write itself fails, or `createRoom`'s final status write fails, the room still stays in `generating`, recorded only in the log. Nothing cleans it up.
+- `failed` rooms now also have a host `players` row. That's harmless because `failed` is terminal.
+- The room page shows no UI difference yet: the host appears in the player list with "(you)" next to their name, and nothing more.
+- `collab.spec.ts:65` is still flaky under parallel load (1 of 3 runs here, and 1 of 3 in an earlier entry); not investigated.

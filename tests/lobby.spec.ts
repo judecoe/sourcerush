@@ -2,7 +2,7 @@
  * Lobby integrity: createRoom, joinRoom, live player list, and read access.
  *
  * Three signed-in accounts:
- *   host     creates the room (member, not a player)
+ *   host     creates the room (member and player, so counts start at 1)
  *   player   joins by code
  *   outsider is signed in but never joins
  *
@@ -82,7 +82,7 @@ test('create, join, live list, refresh, rejoin, and read isolation', async ({ us
   const roomId = host.page.url().split('/room/')[1]
   const code = (await host.page.getByTestId('room-code').textContent())?.trim() ?? ''
   expect(code).toMatch(/^[A-Z2-9]{6}$/)
-  await expect(host.page.getByTestId('player-count')).toHaveText('0')
+  await expect(host.page.getByTestId('player-count')).toHaveText('1')
 
   // Outsider tries a wrong code, then opens the room
   // page directly, which subscribes them to rooms + players for this room.
@@ -100,23 +100,23 @@ test('create, join, live list, refresh, rejoin, and read isolation', async ({ us
   await player.page.getByRole('button', { name: 'Join' }).click()
   await player.page.waitForURL(`**/room/${roomId}`, { timeout: 15_000 })
   await expect(player.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
-  await expect(player.page.getByTestId('player-count')).toHaveText('1')
+  await expect(player.page.getByTestId('player-count')).toHaveText('2')
 
   // Host sees the new player live, without reloading.
-  await expect(host.page.getByTestId('player-count')).toHaveText('1', { timeout: 10_000 })
+  await expect(host.page.getByTestId('player-count')).toHaveText('2', { timeout: 10_000 })
 
   // Refresh restores the lobby from records.
   await player.page.reload()
   await expect(player.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
-  await expect(player.page.getByTestId('player-count')).toHaveText('1')
+  await expect(player.page.getByTestId('player-count')).toHaveText('2')
 
   // Joining again returns the same room and doesn't add a second row.
   await player.page.goto('/join')
   await player.page.getByLabel('Room code').fill(code)
   await player.page.getByRole('button', { name: 'Join' }).click()
   await player.page.waitForURL(`**/room/${roomId}`, { timeout: 15_000 })
-  await expect(player.page.getByTestId('player-count')).toHaveText('1', { timeout: 15_000 })
-  await expect(host.page.getByTestId('player-count')).toHaveText('1')
+  await expect(player.page.getByTestId('player-count')).toHaveText('2', { timeout: 15_000 })
+  await expect(host.page.getByTestId('player-count')).toHaveText('2')
 
   // (a) Outsider got nothing: not on screen, not on the wire.
   await outsider.page.waitForTimeout(2_000)

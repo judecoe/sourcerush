@@ -4,7 +4,7 @@
  * `callAction` and reads go through raw `core.subscribe` probes on each
  * user's authenticated records socket.
  *
- * Accounts: host (creates, not a player), p1 and p2 (players). They are
+ * Accounts: host (creates the room and also plays), p1 and p2 (players). They are
  * this spec's own accounts (label `sourcerush-game`), so other specs running
  * in parallel never act as the same users.
  */
@@ -90,10 +90,15 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   const q0 = opened.data.questionId
   expect(q0).toBe(`${roomId}:0`)
 
-  // The host is not a player and can't answer.
-  const hostAnswer = await act(host.page, 'submitAnswer', { questionId: q0, choiceIndex: 0 })
-  expect(hostAnswer).toEqual({ success: false, error: 'Only players in this room can answer.' })
-
+  // The host is a player too: createRoom gave them a players row at score 0.
+  // (They answer in step 5, after the answeredCount check in step 4.)
+  const [roomRow] = await hostTap.probe({ collection: 'rooms', where: { roomId } })
+  const hostId = roomRow.data.hostId as string
+  const playersAtStart = await hostTap.probe({ collection: 'players', where: { roomId } })
+  expect(playersAtStart).toHaveLength(3)
+  const hostRow = playersAtStart.find((r) => r.data.userId === hostId)
+  expect(hostRow?.recordId).toBe(`${roomId}:${hostId}`)
+  expect(hostRow?.data.score).toBe(0)
   // --- 2. Before reveal: no answer anywhere a member can read ---
   // (a) Nothing on the wire so far carries a passage or explanation. Checked
   // before any questions probe, which could return old rooms' revealed rows.
@@ -157,7 +162,7 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   await p1.page.reload()
   await expect(p1.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
   await expect(p1.page.getByText('Status: question')).toBeVisible()
-  await expect(p1.page.getByTestId('player-count')).toHaveText('2')
+  await expect(p1.page.getByTestId('player-count')).toHaveText('3')
   const [roomAfter] = await p1Tap.probe({ collection: 'rooms', where: { roomId } })
   const [questionAfter] = await p1Tap.probe({ collection: 'questions', where: { roomId } })
   const subsAfter = await p1Tap.probe({ collection: 'submissions', where: { questionId: q0 } })
@@ -166,10 +171,22 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   expect(questionAfter.data).toMatchObject({ prompt, choices })
   expect(subsAfter.map((s) => s.data.choiceIndex)).toEqual([p1Choice])
 
-  // --- 5. p2 answers correctly; then concurrent reveals score exactly once ---
+  // --- 5. p2 and the host answer correctly; then concurrent reveals score exactly once ---
   const p2Submit = await act<{ submittedAt: number }>(p2.page, 'submitAnswer', { questionId: q0, choiceIndex: correct })
   expect(p2Submit.success).toBe(true)
   if (!p2Submit.success) return
+  // The host counts as a player, so the round can't close early without them.
+  const tooEarly = await act(p1.page, 'revealQuestion', { roomId })
+  expect(tooEarly).toEqual({ success: false, error: 'The round is still open.' })
+  const hostSubmit = await act<{ submittedAt: number }>(host.page, 'submitAnswer', { questionId: q0, choiceIndex: correct })
+  console.log('[5] host submit ->', JSON.stringify(hostSubmit))
+  expect(hostSubmit.success).toBe(true)
+  if (!hostSubmit.success) return
+  // Players can't read the host's submission either.
+  for (const tap of [p1Tap, p2Tap]) {
+    const rows = await tap.probe({ collection: 'submissions', where: { questionId: q0 } })
+    expect(rows.filter((r) => r.data.userId === hostId)).toHaveLength(0)
+  }
   // Everyone has answered, so reveal is allowed before endsAt. Six calls at
   // once from two different users.
   const reveals = await Promise.all(
@@ -196,6 +213,10 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   const p2Id = p2Row.data.userId as string
   expect(scores[p1Id]).toBe(expectedP1)
   expect(scores[p2Id]).toBe(expectedP2)
+  // The host is scored by the same rule, exactly once.
+  const expectedHost = scoreFor(true, hostSubmit.data.submittedAt, endsAt)
+  expect(expectedHost).toBeGreaterThan(500)
+  expect(scores[hostId]).toBe(expectedHost)
 
   // The reveal is merged into the question and matches the answer key.
   const [revealed] = await p2Tap.probe({ collection: 'questions', where: { roomId } })

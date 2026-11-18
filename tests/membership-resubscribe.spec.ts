@@ -33,7 +33,7 @@ test('a page subscribed before joining sees pre-existing room rows after join', 
   await player.page.goto('/join')
   await player.page.getByLabel('Room code').fill(code)
   await player.page.getByRole('button', { name: 'Join' }).click()
-  await expect(host.page.getByTestId('player-count')).toHaveText('1', { timeout: 15_000 })
+  await expect(host.page.getByTestId('player-count')).toHaveText('2', { timeout: 15_000 })
 
   // Latecomer opens the room page BEFORE joining: subscribed, sees nothing.
   const watching = latecomer.page
@@ -47,10 +47,10 @@ test('a page subscribed before joining sees pre-existing room rows after join', 
   await joinTab.getByLabel('Room code').fill(code)
   await joinTab.getByRole('button', { name: 'Join' }).click()
   await joinTab.waitForURL(`**/room/${roomId}`, { timeout: 15_000 })
-  await expect(joinTab.getByTestId('player-count')).toHaveText('2', { timeout: 15_000 })
+  await expect(joinTab.getByTestId('player-count')).toHaveText('3', { timeout: 15_000 })
 
   // The already-open tab: does it receive the room row and the player who
   // joined before the latecomer? (Its own new row arrives either way.)
-  await expect(watching.getByTestId('player-count')).toHaveText('2', { timeout: 10_000 })
+  await expect(watching.getByTestId('player-count')).toHaveText('3', { timeout: 10_000 })
   await expect(watching.getByTestId('room-code')).toHaveText(code)
 })
