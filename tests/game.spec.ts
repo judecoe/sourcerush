@@ -105,7 +105,7 @@ test('no client can read or write a job queue', async ({ users }) => {
 test('full round: host check, secrecy, one submission, one scoring, late rejection, refresh', async ({
   users,
 }) => {
-  test.setTimeout(120_000)
+  test.setTimeout(180_000)
   const [host, p1, p2] = await users(3, { label: LABEL })
   const hostTap = await tapRecordsSocket(host.page)
   const p1Tap = await tapRecordsSocket(p1.page)
@@ -291,5 +291,5 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
     (await hostTap.probe({ collection: 'players', where: { roomId } })).map((r) => [r.data.userId, r.data.score]),
   )
   expect(scoresAfter).toEqual(scores)
-  expect(QUESTION_DURATION_MS).toBe(20_000)
+  expect(QUESTION_DURATION_MS).toBe(60_000)
 })

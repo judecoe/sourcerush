@@ -23,7 +23,7 @@ describe('scoreFor', () => {
   })
 
   it('rounds to a whole number', () => {
-    // 500 * 1234 / 20000 = 30.85 -> 31
-    expect(scoreFor(true, endsAt - 1234, endsAt)).toBe(531)
+    // 500 * 1300 / 60000 = 10.83 -> 11 (rounds up)
+    expect(scoreFor(true, endsAt - 1300, endsAt)).toBe(511)
   })
 })

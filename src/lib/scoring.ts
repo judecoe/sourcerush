@@ -4,7 +4,7 @@
  */
 
 /** How long a question stays open. */
-export const QUESTION_DURATION_MS = 20_000
+export const QUESTION_DURATION_MS = 60_000
 
 /**
  * Correct: 500 + round(500 * timeLeft / QUESTION_DURATION_MS).

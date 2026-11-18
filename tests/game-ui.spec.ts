@@ -123,9 +123,9 @@ test('a full game through the UI', async ({ users }) => {
   const prompt2 = ((await host.page.getByTestId('question-prompt').textContent()) ?? '').trim()
   const fixture2 = fixtureFor(prompt2)
 
-  // 20 s timer plus a margin for the reveal call (and its retries).
+  // 60 s timer plus a margin for the reveal call (and its retries).
   for (const u of everyone) {
-    await expect(u.page.getByTestId('reveal-passage')).toContainText(fixture2.passage, { timeout: 35_000 })
+    await expect(u.page.getByTestId('reveal-passage')).toContainText(fixture2.passage, { timeout: 75_000 })
     await expect(u.page.getByTestId('my-result')).toHaveText('No answer')
   }
 
