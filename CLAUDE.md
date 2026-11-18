@@ -63,12 +63,20 @@ The core rule: **anything synced to a client is readable by that client**, even 
 
 | Collection    | Key fields                                                                   | Read                      | Write  |
 | ------------- | ---------------------------------------------------------------------------- | ------------------------- | ------ |
-| `rooms`       | code, hostId, status, sourceTitle, currentIndex, endsAt, answeredCount       | room members              | server |
-| `players`     | roomId, userId, displayName, score                                           | room members              | server |
+| `rooms`       | roomId (= its own record id), code, hostId, status, sourceTitle, currentIndex, endsAt, answeredCount | room members | server |
+| `players`     | roomId, userId, displayName, score; id = `${roomId}:${userId}`               | room members              | server |
+| `team_members`| teamId (= roomId), userId, status; id = `${roomId}:${userId}`                | **server only**           | server |
 | `questions`   | roomId, index, prompt, choices, reveal                                       | room members, once opened | server |
 | `answerKeys`  | questionId, correctIndex, passage, explanation                               | **server only**           | server |
 | `submissions` | questionId, userId, choiceIndex, submittedAt; id = `${questionId}:${userId}` | own row until reveal      | server |
 | `sources`     | roomId, title, fullText                                                      | **server only**           | server |
+
+"Room members" is enforced with the SDK's `'team'` read level: `teamField: 'roomId'` on each room-scoped collection, resolved against `team_members` (the SDK requires that exact name and the `teamId`/`userId`/`status` columns). The host and every player get a `team_members` row; the host has no `players` row. Don't use `teamField: '_rowId'`: the SDK honours it for queries but not for live updates, which is why `rooms` stores its own id in `roomId`.
+
+Gotchas:
+
+- **`tools.create` with an explicit id overwrites an existing row.** It doesn't fail: it merges the new data over the old row (`server.js` `putRecord`: `isUpdate = existing !== null`). `uniqueOn` does not stop this, because its conflict check excludes the row's own id. The only thing that rejects it is an `immutable` column whose value differs (`Cannot modify immutable field`), and that check runs for server actions too.
+- A user who becomes a room member while a page is already subscribed won't receive pre-existing rows on that page until it resubscribes (SDK issue, see AGENT_LOG.md). Navigate to a fresh page after joining.
 
 Room status: `generating → lobby → question → reveal → question → … → finished`. Server actions reject anything that doesn't match the current status.
 
@@ -81,13 +89,20 @@ Server actions:
 - `revealQuestion(roomId)`: allowed when server time ≥ `endsAt` or everyone answered; any member may call it. Score from server timestamps, update `players.score`, merge `reveal: { correctIndex, passage, explanation }` into the question.
   Rounds close by rejection, not by a server timer: late submissions fail in `submitAnswer`, and a client calls `revealQuestion` when its countdown ends. Clients only display the countdown; the server enforces it.
 
-**Open question:** confirm that DeepSpace can make a collection unreadable to clients. If it can't, `answerKeys` and `sources` move out of synced records into worker-side storage. Check this before building on it.
+**Answered: DeepSpace can make a collection unreadable to clients.** Set `read: false` for `'*'`, `viewer`, `member` and `admin`. Tested on `team_members`: a raw `core.subscribe` sent on each signed-in user's own records socket returned no rows. Server actions can still read it. So `answerKeys` and `sources` stay as synced records with that permission. Caveats: tested on local dev with non-owner accounts only (the admin role is untested), and a hidden collection only helps if nothing copies its data into a readable one. Evidence: AGENT_LOG.md, entry "2026-11-17 — rooms + players, createRoom / joinRoom, create/join/lobby pages" (Verified (b) and the "Answer to the CLAUDE.md open question" paragraph).
+
+Plan notes for `submitAnswer` (Thursday; not built yet):
+
+- `submissions`: every field `immutable`, plus an immutable `attemptId = crypto.randomUUID()` set by the server on each call. Every second create for the same `${questionId}:${userId}` then carries a different `attemptId` and is rejected inside one `putRecord` call (`Cannot modify immutable field`), even if the other fields are identical.
+- `answeredCount` is display-only. `revealQuestion`'s "everyone answered" check counts `submissions` server-side; it never trusts `answeredCount`.
+- Required test: two concurrent `submitAnswer` calls for the same user and question. Exactly one succeeds, the other is rejected, and the stored `choiceIndex` is the first one's.
 
 ## Invariants (never break these)
 
 1. A client can never read a correct answer before its reveal.
 2. A client can never write a score, a reveal, or another player's submission.
 3. One submission per player per question.
+   The deterministic id `${questionId}:${userId}` alone does NOT guarantee this: a second `tools.create` with the same id silently overwrites the first, and `uniqueOn` won't object. A check-then-create in an action is also not atomic: the `tools.get` and `tools.create` are separate requests, so two concurrent calls can both pass the check. The design must make the second write fail inside a single `putRecord` call, or otherwise be harmless.
 4. No submission is accepted after `endsAt` (server time).
 5. Host-only actions check host identity on the server.
 6. Refreshing the page mid-game restores the full state from records.
