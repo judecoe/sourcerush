@@ -35,14 +35,36 @@ function correctChoiceIndex(prompt: string, choices: string[]): number {
 
 test('createRoom refuses bad input before creating anything', async ({ users }) => {
   const [host] = await users(1, { label: LABEL })
+  const hostTap = await tapRecordsSocket(host.page)
   await openApp(host.page)
+  // Rooms this account can read (every room it hosted or joined). Tests in
+  // this file run one at a time, so nothing else adds rooms meanwhile.
+  // Local data persists and this account gains a room every run, so the
+  // count must stay below the limit: at the limit, before === after would
+  // pass even if a room had been created. (With no limit the socket query
+  // is uncapped today; the explicit one keeps this check honest if that
+  // ever changes.) 500 matches ROOM_QUERY_LIMIT in src/actions/index.ts.
+  const ROOMS_PROBE_LIMIT = 500
+  const roomsBefore = (await hostTap.probe({ collection: 'rooms', limit: ROOMS_PROBE_LIMIT })).length
+  console.log(`[refuse] host can read ${roomsBefore} rooms before (limit ${ROOMS_PROBE_LIMIT})`)
+  expect(roomsBefore, 'too many local rooms for this check; clear local dev data').toBeLessThan(ROOMS_PROBE_LIMIT)
   // Each of these is refused by parseCreateRoomParams, before the quota slot
-  // or the room is created, so no test here can reach a paid integration.
-  for (const params of [{}, { sample: true, url: 'https://example.com' }, { url: 'ftp://example.com/a' }, { url: 'not a url' }]) {
+  // or the room is created, so no test here can reach a paid integration
+  // (no Exa, Firecrawl or Anthropic call).
+  for (const params of [
+    {},
+    { sample: true, url: 'https://example.com' },
+    { url: 'ftp://example.com/a' },
+    { url: 'not a url' },
+    { url: 'https://example.com/a', topic: 'tides' },
+    { topic: 'ab' },
+    { topic: 'https://example.com/tides' },
+  ]) {
     const created = await act(host.page, 'createRoom', params)
     console.log('[refuse] createRoom', JSON.stringify(params), '->', JSON.stringify(created))
     expect(created.success, JSON.stringify(params)).toBe(false)
   }
+  expect((await hostTap.probe({ collection: 'rooms', limit: ROOMS_PROBE_LIMIT })).length).toBe(roomsBefore)
 })
 
 test('no client can read or write a job queue', async ({ users }) => {

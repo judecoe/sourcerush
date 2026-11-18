@@ -23,6 +23,8 @@ export function Lobby({ room, players, userId, isHost, ready }: Props) {
         <p data-testid="room-code" className="font-mono text-4xl font-bold tracking-widest">
           {room.code}
         </p>
+        {/* Title only, no link: a link here invites opening the article during
+            rounds. The link (SourceLink) is on the Game over screen. */}
         {room.sourceTitle && (
           <p className="mt-2 text-sm text-muted-foreground">Article: {room.sourceTitle}</p>
         )}

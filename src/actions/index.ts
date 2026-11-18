@@ -158,6 +158,8 @@ export const actions: Record<string, ActionHandler<Env>> = {
    *                    job (src/jobs.ts) and return at once with
    *                    status 'generating'. The job moves the room to 'lobby'
    *                    or 'failed'. A slot stays used even if generation fails.
+   *   { topic }        The same, but the job first asks Exa for an article
+   *                    about the topic (same quota slot).
    *   { sample: true } "Try it yourself": runs the same pipeline right here with
    *                    the Tide Clock fixture (SAMPLE_PIPELINE_DEPS), no API
    *                    calls, no quota, and returns 'lobby'.
@@ -173,11 +175,11 @@ export const actions: Record<string, ActionHandler<Env>> = {
     const request = parseCreateRoomParams(params)
     if (!request.ok) return { success: false, error: request.error }
 
-    // 2. A link costs owner credits: claim one of today's slots first.
-    if (request.kind === 'url' && !(await claimRoomSlot(tools, userId))) {
+    // 2. A link or topic costs owner credits: claim one of today's slots first.
+    if (request.kind !== 'sample' && !(await claimRoomSlot(tools, userId))) {
       return {
         success: false,
-        error: `You've reached today's limit of ${ROOM_DAILY_LIMIT} rooms from links. Try again tomorrow, or use Try it yourself.`,
+        error: `You've reached today's limit of ${ROOM_DAILY_LIMIT} rooms from links or topics. Try again tomorrow, or use Try it yourself.`,
       }
     }
 
@@ -197,6 +199,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
           hostId: userId,
           status: 'generating',
           sourceTitle: '',
+          sourceUrl: '',
           currentIndex: -1,
           answeredCount: 0,
         },
@@ -238,8 +241,11 @@ export const actions: Record<string, ActionHandler<Env>> = {
       return { success: true, data: { roomId, code, ...finished } }
     }
 
-    // 3b. A link: hand the slow, paid part to a background job on this room's own queue.
-    const payload: GenerateJobPayload = { roomId, hostId: userId, url: request.url }
+    // 3b. A link or topic: hand the slow, paid part to a background job on this room's own queue.
+    const payload: GenerateJobPayload =
+      request.kind === 'url'
+        ? { roomId, hostId: userId, url: request.url }
+        : { roomId, hostId: userId, topic: request.topic }
     try {
       await enqueueJob(env.JOB_ROOMS, jobQueueId(roomId), GENERATE_JOB_TYPE, payload, {
         maxAttempts: 1,

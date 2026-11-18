@@ -490,3 +490,111 @@ Did:
 Verified: tsc clean, eslint clean, vitest 58/58. `npx deepspace test run all`: 23 passed (4/4 landing). `membership-resubscribe` ✘ is its expected `test.fail()`.
 
 Not verified / risks: the "→" is in the link's accessible name, so screen readers read it out ("right arrow"). Nothing was viewed in a browser.
+
+## 2026-11-18 — Research: Exa topic search, guest joining (no code)
+Did: Research only. No source files changed; only this entry added. Read `npx deepspace integrations list` / `integrations info exa/search` (catalog and schema only, nothing invoked), docs `/agents/web-search-image-generation-no-api-keys.md`, `/guides/authentication.md`, `/sdk-reference/client/auth.md`, `/concepts/permissions.md`, `node_modules/deepspace/dist` (v0.44.2), our `src/server/action-routes.ts`, `realtime-routes.ts`, `http-routes.ts`, `src/integrations.ts`, schemas. Shallow-cloned github.com/deepdotspace/doodlechain into the session scratchpad to read it (nothing copied into this repo).
+Findings:
+- A. Exa is in the catalog: `exa/search` (also `contents`, `findSimilar`, `news-search`, `answer`), billed "at the provider's actual cost plus platform markup", no per-call figure published. The output schema requires only `title`, `url`, `publishedDate`, `author`, `id`; `text` comes back only if you ask for `contents.text`, and its shape isn't documented. The response carries `costDollars.total` / `costUsd`. Exa → URL → the unchanged Firecrawl → `runQuestionPipeline` path is possible. Sketch given in chat; nothing built.
+- B. No guest sessions with a verified userId. The only sign-in methods are Google, GitHub and email/password. A signed-out socket gets a random `anon-<uuid>` per connection (`worker.js:245`) with role `viewer`, and isn't registered as a user (`worker.js:3380`). Server actions return 401 without a verified bearer JWT (`src/server/action-routes.ts:46-56`). Doodlechain gets around this with its own Durable Object (a vendored `GameRoom`) plus a client-chosen localStorage `cid`, which is not SDK auth. Stopped there as instructed.
+Verified: catalog and schema output read directly from the CLI; SDK and repo lines read directly.
+Not verified / risks: Exa per-call cost (not documented; would only show up in a real call's `costUsd`); that `tools.integration('exa/search')` works from the job with an empty caller JWT (inferred: firecrawl/scrape works through the same path today); the format of the `text` field.
+
+## 2026-11-18 — Topic rooms via Exa, rooms.sourceUrl (+ plan for /join/<code>)
+Did:
+- `createRoom` takes exactly one of `{ url }` | `{ topic }` | `{ sample: true }`. Topic rules: trimmed, 3–200 chars, no control characters, must not start with http(s)://. Topic rooms use the same `room_quota` slot as links. The quota message now says "links or topics". Files: `src/lib/create-room-params.ts`, `src/actions/index.ts`.
+- Job (`src/jobs.ts`): when the payload has a `topic`, it first calls `searchArticle` (`src/server/generation.ts`): `exa/search` with `numResults` 5, `type` 'auto', `excludeDomains` = `SEARCH_EXCLUDED_DOMAINS` (youtube, x, twitter, tiktok, instagram, facebook, reddit), timeout `SEARCH_TIMEOUT_MS` = 10 s. Then the unchanged `runQuestionPipeline(url)`. No usable result → `USER_MESSAGES.noArticleFound`. A failed or malformed call → `serviceUnavailable`.
+- `readSearchResponse` (pure, `src/lib/questions/responses.ts`) picks the first http(s) result not on an excluded site or its subdomains, and returns `noneFound` plus a metrics line (result count, costUsd).
+- Logs never contain the topic, the chosen URL, or the provider's error text on a failed search.
+- `rooms.sourceUrl` column (`src/schemas/rooms-schema.ts`, optional, no migration needed per docs `/agents/add-field-existing-app-without-losing-data.md`). Set by `finishGeneration` together with `lobby` for url and topic rooms. Empty for the sample.
+- UI: new `src/components/game/SourceLink.tsx` (links only http(s) values, `rel="noopener noreferrer"`), used in `Lobby.tsx` and the finished screen in `room/[roomId].tsx`. `/create` has a second form, "Or a topic" → "Find an article".
+- `SEARCH_TIMEOUT_MS` added to `src/lib/generation-timing.ts`. Worst case is now 10 + 30 + 2 × 60 = 160 s < `STALE_GENERATING_MS` (180 s, unchanged).
+- Tests: `create-room-params.test.ts` (topic cases, exactly-one-of), `pipeline.test.ts` (5 `readSearchResponse` cases, timing inequality including search). `CLAUDE.md` updated (rooms row, createRoom `{ topic }`, timing, responses.ts, the no-url/topic-in-specs rule).
+Verified:
+- `npx vitest run src/lib`: 62 passed (55 before this change).
+- `npx tsc --noEmit -p .`: no errors.
+- `npx deepspace test run all`: 23 passed. These cover sample rooms only, so they check that nothing regressed. They don't exercise topics or the link.
+Not verified / risks:
+- No real `exa/search` call made. Not yet confirmed against a live response: the response shape (taken from the `integrations info` output schema), that the call works from the job with an empty caller JWT, that `excludeDomains` is honoured, and the per-call cost.
+- The `SourceLink` link and the topic form haven't been looked at in a browser.
+- Thrown errors (e.g. a network failure inside `tools.integration`) are still logged with their message by the job's catch block. I don't expect it to contain the query, but haven't seen one.
+- Rooms created before this change have no `sourceUrl`, so they show the title without a link.
+
+## 2026-11-18 — Plan: /join/<code> link that survives sign-in (deferred; revisit only if playtesting shows typing the code is a problem)
+Status: plan only, nothing built. No invite-link button.
+Problem: Google/GitHub sign-in always lands on /home. The SDK starts OAuth with a fixed `window.location.href = /api/auth/social-redirect?provider=X` (`node_modules/deepspace/dist/index.js:1020`). Our `social-redirect` sends only the app origin as `returnTo` (`src/server/http-routes.ts:93`), and `oauth-complete` always redirects to `/home` (`http-routes.ts:107`). Email sign-in happens in place and keeps the URL.
+Plan (client only; no data-model, permission, scoring or state-machine change; `joinRoom` still does every real check):
+1. Route `/join/:code`: move `(protected)/join.tsx` to `join/index.tsx` and add `join/[code].tsx`. Confirm Generouted accepts that layout. When signed in, the page checks the code (6 characters from `CODE_ALPHABET`), clears any saved code, and once `useMutations().ready` calls `joinRoom(code)` once, then goes to `/room/<roomId>`. If joining fails, it shows the join form filled in with the code, plus the error.
+2. The SignedOutPanel's Sign in button saves `{ code, savedAt }` to sessionStorage, only when the path is `/join/<valid code>`. sessionStorage is per tab and survives the round trip to the OAuth provider. Only a validated code is stored, never a path, so there's no open redirect.
+3. `/home`, when signed in: if a saved code is under 10 minutes old, remove it and `navigate('/join/<code>', { replace: true })`. An older one is just removed.
+4. Email sign-in is in place, so step 1 handles it and clears the saved code.
+Tests if built:
+- Unit tests for the save/read/expiry helper.
+- `landing.spec.ts`: signed out, `/join/ABC234` shows the sign-in panel.
+- `game-ui.spec.ts` (label `sourcerush-ui`): a signed-in player opening `/join/<code>` lands in the lobby.
+- The OAuth round trip can only be checked by hand on a deploy (the test accounts use email).
+
+## 2026-11-18 — SourceLink only on Game over; topic refusal specs; lint + full test runs
+Did:
+- `src/components/game/Lobby.tsx`: back to the plain "Article: <title>" text (no link), with a comment saying why. `SourceLink` is now used only on the finished screen (`room/[roomId].tsx`); its header comment updated. The `sourceUrl` column is unchanged.
+- `tests/game.spec.ts`, "createRoom refuses bad input before creating anything": added `{ url, topic }`, `{ topic: 'ab' }` and `{ topic: 'https://example.com/tides' }` to the existing refusal list. The test now also counts the rooms the host can read before and after (raw `core.subscribe` probe) and expects no change. All three are refused by `parseCreateRoomParams` before any quota slot, room or job, so no paid call is possible.
+- The /join/<code> plan is recorded above, marked deferred.
+Verified:
+- `npx eslint .`: exit 0, no output.
+- `npx vitest run` (whole repo): 8 files, 65 tests passed (incl. `prerender.test.ts` and `src/prerender-entry.test.tsx`, outside src/lib).
+- `npx deepspace test run all`: exit 0, 23 passed. The `[refuse]` lines show each new case refused with its own message: "Paste an article link, enter a topic, or choose Try it yourself." / "Enter a topic of at least 3 characters." / "That looks like a link. Paste it in the article link box instead." `membership-resubscribe.spec.ts` shows ✘ by design (`test.fail()`, the known SDK issue), the same as before.
+- No real topic rooms were created.
+Not verified / risks:
+- The room count relies on the tests in `game.spec.ts` running one at a time (Playwright's default without `fullyParallel`, which the config doesn't set).
+- `sourceUrl` is still synced to room members during rounds, so a modified client can read it. The plain title already allows a web search, so this only removes the easy click.
+- The Game over link and the /create topic form still haven't been looked at in a browser.
+
+## 2026-11-18 — Room-count check in game.spec.ts: explicit limit, fail loudly near it
+Question: what limit did the before/after `rooms` count use? Answer:
+- None. A socket `core.subscribe` with no `limit` is uncapped. `handleSubscribe` → `executeQuery` → `executeTableQuery`, and for a permission-filtered collection with no limit it reads the whole table (`node_modules/deepspace/dist/worker.js:2172-2175`, `2321`).
+- So the old check couldn't pass vacuously today. `DEFAULT_QUERY_LIMIT = 50` (`worker.js:1135-1140`) applies to the server-side `tools.query`, not to the socket.
+- Passing a limit adds a different cap: the filtered scan stops after `MAX_FILTERED_SCAN_ROWS` = 5000 rows of the whole table (`worker.js:2179`, `2337`).
+Did: `tests/game.spec.ts`, refusal test.
+- Both probes pass `limit: ROOMS_PROBE_LIMIT` (500, the same as `ROOM_QUERY_LIMIT` in `src/actions/index.ts`).
+- The before count is logged, and asserted `< 500` with the message "too many local rooms for this check; clear local dev data".
+Verified:
+- `npx deepspace test run all`: exit 0, 23 passed (resubscribe spec ✘ by design, `test.fail()`). Log line: `[refuse] host can read 34 rooms before (limit 500)`.
+- `npx eslint tests/game.spec.ts`: exit 0.
+- The whole local `rooms` table has 133 rows (read-only `sqlite3` count on `.wrangler/state/v3/do/sourcerush-AppRecordRoom/*.sqlite`), well under the 5000-row scan cap.
+Not verified / risks:
+- The host gains about 1 readable room per full run (the full-round test's sample room), so the `< 500` assertion trips after roughly 466 more runs.
+- The 5000-row scan cap counts all rooms from every account, not just this host's, so local data should be cleared long before either limit. Nothing asserts the table size.
+
+## 2026-11-18 — First real topic room (run by hand), result
+Log (pasted by the human; room ed6aa8d4-…):
+- `search 1682 ms, results 5, costUsd 0.007`
+- `scrape 16055 ms, creditsUsed 1, costUsd 0.0038`
+- `only 1817 chars of text after cleanup (need 2000)`
+- `done in 17769 ms -> failed`
+What it shows:
+- exa/search works from the job with an empty caller JWT.
+- The response has `results` and a numeric `costUsd`, as `readSearchResponse` expects.
+- The chosen URL was http(s) and scrapeable.
+- The log lines contain no topic and no URL.
+- The first usable result was too short, so the room failed with `USER_MESSAGES.tooLittleText` ("There isn't enough article text on that page to make a quiz."). That message is worded for a pasted link; the topic host never chose a page.
+- Total cost of the failed room ≈ $0.011 (search + one scrape). No generation was spent.
+Did: `src/lib/questions/responses.ts` header comment now records the confirmed exa/search shape. Comment only.
+Verified: `npx vitest run src/lib`: 62 passed.
+Not verified / risks: whether `excludeDomains` is honoured (the picked site is unknown, since URLs aren't logged). The `costDollars.total` fallback hasn't been seen in a real response. Options for short articles were proposed in chat; nothing built.
+
+## 2026-11-18 — Topic rooms: reworded "that page" failures (option 1)
+Did:
+- `src/lib/questions/pipeline.ts`: new `USER_MESSAGES.topicArticleUnusable` = "The article we found didn't have enough usable text. Try a different topic."
+- New pure `topicRoomResult(result)` in the same file: maps `tooLittleText` and `pageUnreachable` to `topicArticleUnusable` and returns every other result (success included) unchanged.
+- `src/jobs.ts`: applies `topicRoomResult` to the pipeline result only when the payload has a `topic`. Link rooms keep their current messages. `runQuestionPipeline` is unchanged. `errorMessage` is still always a `USER_MESSAGES` entry.
+- `src/lib/questions/pipeline.test.ts`: new `topicRoomResult` block with three tests (rewords both cases and keeps the log; leaves the other failures and success unchanged; always yields a `USER_MESSAGES` entry). The existing raw-error test uses `Object.values(USER_MESSAGES)`, so it already includes the new constant.
+- `CLAUDE.md`: topic-room bullet notes the rewording.
+Verified:
+- `npx tsc --noEmit -p .`: exit 0. The first run failed on readonly `as const` test data; I retyped it as `PipelineResult`.
+- `npx eslint .`: exit 0.
+- `npx vitest run`: 8 files, 68 passed (65 before).
+- `npx deepspace test run all`: exit 0, 23 passed (resubscribe spec ✘ by design, `test.fail()`). Refusal check log: 35 rooms before (limit 500).
+- No real topic rooms were created.
+Not verified / risks:
+- The new message hasn't been seen in a real room. The job wiring (`payload.topic !== undefined ? topicRoomResult(...) : ...`) has no test: the job calls real integrations, so specs can't run it.
+- `pageUnreachable` only fires on an HTTP error status from the scrape. A scrape that fails or times out still gives `serviceUnavailable`, for both room kinds.
+Deferred (option 2, not built; design fixed by the human): `readSearchResponse` returns up to 2 usable URLs. The job tries the second only when the first fails with `tooLittleText` or `pageUnreachable`, never after generation has run. `runQuestionPipeline` stays unchanged. `STALE_GENERATING_MS` goes to 210_000 and the timing test is updated.

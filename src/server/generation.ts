@@ -1,6 +1,6 @@
 /**
- * Worker-side half of question generation: the real Firecrawl and Anthropic
- * calls, and writing the pipeline's result to the room. Used by createRoom
+ * Worker-side half of question generation: the real Exa, Firecrawl and
+ * Anthropic calls, and writing the pipeline's result to the room. Used by createRoom
  * ("Try it yourself" runs finishGeneration directly) and by the
  * 'generate-questions' job in src/jobs.ts (everything here).
  *
@@ -9,9 +9,15 @@
  */
 
 import type { ActionTools } from 'deepspace/worker'
-import { GENERATE_TIMEOUT_MS, SCRAPE_TIMEOUT_MS } from '../lib/generation-timing'
+import { GENERATE_TIMEOUT_MS, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS } from '../lib/generation-timing'
 import { USER_MESSAGES, type GenerateResult, type PipelineResult, type ScrapeResult } from '../lib/questions/pipeline'
-import { readGenerateResponse, readScrapeResponse } from '../lib/questions/responses'
+import {
+  readGenerateResponse,
+  readScrapeResponse,
+  readSearchResponse,
+  SEARCH_EXCLUDED_DOMAINS,
+  type SearchResult,
+} from '../lib/questions/responses'
 
 export const QUESTION_MODEL = 'claude-haiku-5-5'
 /**
@@ -25,7 +31,13 @@ export const QUESTION_MODEL = 'claude-haiku-5-5'
 export const GENERATE_MAX_TOKENS = 12_000
 
 export const GENERATE_JOB_TYPE = 'generate-questions'
-export type GenerateJobPayload = { roomId: string; hostId: string; url: string }
+/** Exactly one of `url` (a pasted link) or `topic` (search for an article first). */
+export type GenerateJobPayload =
+  | { roomId: string; hostId: string; url: string; topic?: undefined }
+  | { roomId: string; hostId: string; topic: string; url?: undefined }
+
+/** How many Exa results to look through for a usable link. */
+export const SEARCH_NUM_RESULTS = 5
 
 /** One job queue per room, so two hosts' rooms never wait on each other. */
 export function jobQueueId(roomId: string): string {
@@ -55,6 +67,37 @@ function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<
     timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms} ms`)), ms)
   })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * Find an article for a topic room. Logs duration, result count and cost,
+ * never the topic or the chosen URL.
+ */
+export async function searchArticle(tools: ActionTools, roomId: string, topic: string): Promise<SearchResult> {
+  const started = Date.now()
+  try {
+    const r = await withTimeout(
+      tools.integration('exa/search', {
+        query: topic,
+        numResults: SEARCH_NUM_RESULTS,
+        type: 'auto',
+        excludeDomains: [...SEARCH_EXCLUDED_DOMAINS],
+      }),
+      SEARCH_TIMEOUT_MS,
+      'search',
+    )
+    if (!r.success) {
+      console.info(`[generate] room ${roomId}: search ${Date.now() - started} ms, failed`)
+      // Code and status only: a provider error message could echo the query (the topic).
+      return { ok: false, noneFound: false, log: `${r.code ?? 'error'} (HTTP ${r.status ?? '?'})` }
+    }
+    const { result, metrics } = readSearchResponse(r.data)
+    console.info(`[generate] room ${roomId}: search ${Date.now() - started} ms, ${metrics}`)
+    return result
+  } catch (err) {
+    console.info(`[generate] room ${roomId}: search ${Date.now() - started} ms, threw`)
+    throw err
+  }
 }
 
 /** Real scrape for the pipeline. Logs duration and cost, never page text. */
@@ -149,22 +192,24 @@ async function storeQuestions(
 
 /**
  * Apply a pipeline result to a room: store the questions and move to
- * 'lobby', or move to 'failed' with the result's user-safe message. Logs
- * the pipeline's log lines. Returns the room's new status, or null if the
+ * 'lobby' (with `sourceUrl`, the article's link, when there is one; the
+ * sample has none), or move to 'failed' with the result's user-safe
+ * message. Logs the pipeline's log lines. Returns the room's new status, or null if the
  * final status write itself failed (the room then stays 'generating').
  */
 export async function finishGeneration(
   tools: ActionTools,
   roomId: string,
   result: PipelineResult,
+  sourceUrl?: string,
 ): Promise<{ status: 'lobby' | 'failed'; errorMessage?: string } | null> {
   for (const line of result.log) console.warn(`[generate] room ${roomId}: ${line}`)
 
-  let next: { status: 'lobby' | 'failed'; sourceTitle?: string; errorMessage?: string }
+  let next: { status: 'lobby' | 'failed'; sourceTitle?: string; sourceUrl?: string; errorMessage?: string }
   if (result.ok) {
     try {
       await storeQuestions(tools, roomId, result)
-      next = { status: 'lobby', sourceTitle: result.title }
+      next = { status: 'lobby', sourceTitle: result.title, ...(sourceUrl ? { sourceUrl } : {}) }
     } catch (err) {
       console.error(`[generate] room ${roomId}: storing questions failed: ${err instanceof Error ? err.message : String(err)}`)
       next = { status: 'failed', errorMessage: USER_MESSAGES.serviceUnavailable }

@@ -1,17 +1,20 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GENERATE_TIMEOUT_MS, SCRAPE_TIMEOUT_MS, STALE_GENERATING_MS } from '../generation-timing'
+import { GENERATE_TIMEOUT_MS, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS, STALE_GENERATING_MS } from '../generation-timing'
 import { BROKEN_FIXTURE_CANDIDATES, FIXTURE_CANDIDATES, FIXTURE_SOURCE, SAMPLE_PIPELINE_DEPS } from './fixtures'
 import {
   GENERATE_ATTEMPTS,
   MIN_ARTICLE_CHARS,
+  topicRoomResult,
   USER_MESSAGES,
   runQuestionPipeline,
   type GenerateResult,
   type PipelineDeps,
+  type PipelineResult,
   type ScrapeResult,
+  type UserMessage,
 } from './pipeline'
 import { MAX_SOURCE_CHARS, QUESTIONS_MIN_USABLE } from './prompt'
-import { readGenerateResponse, readScrapeResponse } from './responses'
+import { readGenerateResponse, readScrapeResponse, readSearchResponse } from './responses'
 
 const URL = 'https://example.com/article'
 const GOOD = JSON.stringify({ questions: FIXTURE_CANDIDATES })
@@ -29,6 +32,35 @@ function fakes(outputs: GenerateResult[], scrape?: ScrapeResult) {
 }
 
 const ALL_MESSAGES: string[] = Object.values(USER_MESSAGES)
+
+describe('topicRoomResult', () => {
+  const failed = (userMessage: UserMessage): PipelineResult => ({ ok: false, userMessage, log: ['x'] })
+
+  it('rewords the two "that page" failures, keeping the log', () => {
+    for (const m of [USER_MESSAGES.tooLittleText, USER_MESSAGES.pageUnreachable]) {
+      expect(topicRoomResult(failed(m))).toEqual({
+        ok: false,
+        userMessage: USER_MESSAGES.topicArticleUnusable,
+        log: ['x'],
+      })
+    }
+  })
+
+  it('leaves every other failure and success unchanged', () => {
+    for (const m of [USER_MESSAGES.notEnoughQuestions, USER_MESSAGES.serviceUnavailable, USER_MESSAGES.noArticleFound]) {
+      expect(topicRoomResult(failed(m))).toEqual(failed(m))
+    }
+    const ok: PipelineResult = { ok: true, title: 't', sourceUsed: 's', questions: [], log: [] }
+    expect(topicRoomResult(ok)).toBe(ok)
+  })
+
+  it('always yields one of USER_MESSAGES', () => {
+    for (const m of Object.values(USER_MESSAGES)) {
+      const r = topicRoomResult(failed(m))
+      if (!r.ok) expect(ALL_MESSAGES).toContain(r.userMessage)
+    }
+  })
+})
 
 describe('runQuestionPipeline', () => {
   it('succeeds on the first try', async () => {
@@ -280,8 +312,68 @@ describe('integration response readers', () => {
   })
 })
 
+describe('readSearchResponse (exa/search)', () => {
+  const result = (url: unknown) => ({ title: 't', url, publishedDate: null, author: null, id: 'x' })
+
+  it('picks the first usable result and reports count and cost', () => {
+    const { result: r, metrics } = readSearchResponse({
+      results: [result('https://example.com/tides'), result('https://example.org/other')],
+      costUsd: 0.005,
+    })
+    expect(r).toEqual({ ok: true, url: 'https://example.com/tides' })
+    expect(metrics).toBe('results 2, costUsd 0.005')
+  })
+
+  it('falls back to costDollars.total for the cost', () => {
+    const { metrics } = readSearchResponse({ results: [], costDollars: { total: 0.007 } })
+    expect(metrics).toBe('results 0, costUsd 0.007')
+  })
+
+  it('skips excluded sites (and their subdomains), non-http and malformed URLs', () => {
+    const { result: r } = readSearchResponse({
+      results: [
+        result('https://www.youtube.com/watch?v=1'),
+        result('https://m.facebook.com/post'),
+        result('https://old.reddit.com/r/x'),
+        result('https://x.com/a'),
+        result('https://twitter.com/a'),
+        result('https://www.tiktok.com/@a'),
+        result('https://instagram.com/a'),
+        result('ftp://example.com/file'),
+        result('not a url'),
+        result(42),
+        'not an object',
+        result('https://box.com/article'), // ends in "x.com" but isn't x.com
+      ],
+    })
+    expect(r).toEqual({ ok: true, url: 'https://box.com/article' })
+  })
+
+  it('is not ok when nothing is usable, without naming any URL', () => {
+    const { result: r, metrics } = readSearchResponse({ results: [result('https://youtube.com/watch?v=1')] })
+    expect(r).toEqual({
+      ok: false,
+      noneFound: true,
+      log: 'no usable search result (1 results, 1 skipped: bad URL or excluded site)',
+    })
+    expect(metrics).toBe('results 1, costUsd unknown')
+    expect(readSearchResponse({ results: [] }).result).toMatchObject({ ok: false, noneFound: true })
+  })
+
+  it('is not ok when results is missing', () => {
+    expect(readSearchResponse({}).result).toEqual({
+      ok: false,
+      noneFound: false,
+      log: 'response has no array at data.results',
+    })
+    expect(readSearchResponse(null).result.ok).toBe(false)
+  })
+})
+
 describe('generation timing', () => {
-  it('the worst case finishes before the room page calls it stale', () => {
-    expect(SCRAPE_TIMEOUT_MS + GENERATE_ATTEMPTS * GENERATE_TIMEOUT_MS).toBeLessThan(STALE_GENERATING_MS)
+  it('the worst case (topic room: search + scrape + both generations) finishes before the room page calls it stale', () => {
+    expect(SEARCH_TIMEOUT_MS + SCRAPE_TIMEOUT_MS + GENERATE_ATTEMPTS * GENERATE_TIMEOUT_MS).toBeLessThan(
+      STALE_GENERATING_MS,
+    )
   })
 })

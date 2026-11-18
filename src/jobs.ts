@@ -2,11 +2,16 @@
  * Background-job handler, invoked by AppJobRoom (worker.ts) for every job
  * picked up from a queue. One job type:
  *
- * 'generate-questions' { roomId, hostId, url }
+ * 'generate-questions' { roomId, hostId, url } or { roomId, hostId, topic }
  *   Queued by createRoom (server only: worker.ts closes the job sockets to
  *   clients) on the room's own queue, `room:${roomId}`, with maxAttempts 1.
- *   Runs the question pipeline against the real Firecrawl + Anthropic
- *   integrations, then sets the room to 'lobby' or 'failed'.
+ *   For a topic, first asks Exa for an article (searchArticle); no usable
+ *   result fails the room with USER_MESSAGES.noArticleFound. Then runs the
+ *   question pipeline on the link against the real Firecrawl + Anthropic
+ *   integrations, and sets the room to 'lobby' (with sourceUrl) or 'failed'.
+ *   For a topic room, a too-short or unreachable article fails with
+ *   USER_MESSAGES.topicArticleUnusable instead (topicRoomResult).
+ *   The topic is never logged.
  *
  * It acts as the room's host, so every row it creates has the same
  * `_created_by` as when createRoom did this work inline. It only creates
@@ -22,7 +27,7 @@
 import type { Job, JobContext } from 'deepspace/worker'
 import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../worker.js'
-import { runQuestionPipeline, USER_MESSAGES } from './lib/questions/pipeline.js'
+import { runQuestionPipeline, topicRoomResult, USER_MESSAGES } from './lib/questions/pipeline.js'
 import { createActionTools } from './server/action-routes.js'
 import {
   failRoom,
@@ -30,6 +35,7 @@ import {
   generateText,
   GENERATE_JOB_TYPE,
   scrapeArticle,
+  searchArticle,
   type GenerateJobPayload,
 } from './server/generation.js'
 
@@ -51,22 +57,43 @@ async function stillGenerating(tools: ActionTools, roomId: string, hostId: strin
 export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void> {
   if (job.type !== GENERATE_JOB_TYPE) throw new Error(`Unknown job type: ${job.type}`)
 
-  const { roomId, hostId, url } = job.payload as GenerateJobPayload
+  const payload = job.payload as GenerateJobPayload
+  const { roomId, hostId } = payload
   const tools = createActionTools(env, hostId, '')
   const started = Date.now()
 
   try {
     if (!(await stillGenerating(tools, roomId, hostId))) return
 
+    // A topic room: find the article first. A failed call and "nothing
+    // usable" both end the room here, with different messages.
+    let url = payload.url
+    if (payload.topic !== undefined) {
+      const found = await searchArticle(tools, roomId, payload.topic)
+      if (!found.ok) {
+        if (!(await stillGenerating(tools, roomId, hostId))) return
+        await finishGeneration(tools, roomId, {
+          ok: false,
+          userMessage: found.noneFound ? USER_MESSAGES.noArticleFound : USER_MESSAGES.serviceUnavailable,
+          log: [`search: ${found.log}`],
+        })
+        return
+      }
+      url = found.url
+    }
+    if (url === undefined) throw new Error('job payload has neither url nor topic')
+
     let attempt = 0
-    const result = await runQuestionPipeline(url, {
+    const pipelineResult = await runQuestionPipeline(url, {
       scrape: (u) => scrapeArticle(tools, roomId, u),
       generate: (system, user) => generateText(tools, roomId, ++attempt, system, user),
     })
+    // A topic room's host never chose the page, so "that page" messages are reworded.
+    const result = payload.topic !== undefined ? topicRoomResult(pipelineResult) : pipelineResult
 
     // Up to ~150 s have passed; don't overwrite a room that moved on.
     if (!(await stillGenerating(tools, roomId, hostId))) return
-    const finished = await finishGeneration(tools, roomId, result)
+    const finished = await finishGeneration(tools, roomId, result, url)
     console.info(`[generate] room ${roomId}: done in ${Date.now() - started} ms -> ${finished?.status ?? 'status write failed'}`)
   } catch (err) {
     console.error(`[generate] room ${roomId}: job error: ${err instanceof Error ? err.message : String(err)}`)

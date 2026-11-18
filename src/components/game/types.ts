@@ -12,6 +12,7 @@ export type Room = {
   status: RoomStatus
   errorMessage?: string
   sourceTitle?: string
+  sourceUrl?: string
   currentIndex: number
   endsAt?: number
   answeredCount?: number

@@ -26,6 +26,9 @@ export const roomsSchema: CollectionSchema = {
     // Set only when status is 'failed'. Safe to show players: no answer data.
     { name: 'errorMessage', storage: 'text', interpretation: 'plain' },
     { name: 'sourceTitle', storage: 'text', interpretation: 'plain' },
+    // The article's link (pasted, or found by Exa for a topic), set with
+    // 'lobby'. Empty for the sample. Safe to show players: no answer data.
+    { name: 'sourceUrl', storage: 'text', interpretation: 'plain' },
     // -1 means no question has been opened yet.
     { name: 'currentIndex', storage: 'number', interpretation: 'plain', default: -1 },
     // Epoch milliseconds, server clock. Empty until a question is open.

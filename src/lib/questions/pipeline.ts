@@ -29,6 +29,10 @@ export const GENERATE_ATTEMPTS = 2
 export const USER_MESSAGES = {
   tooLittleText: "There isn't enough article text on that page to make a quiz.",
   pageUnreachable: "Couldn't open that page.",
+  noArticleFound: "Couldn't find a suitable article for that topic. Try wording it differently.",
+  // Topic rooms only, in place of tooLittleText / pageUnreachable (see topicRoomResult):
+  // the host typed a topic and never chose "that page".
+  topicArticleUnusable: "The article we found didn't have enough usable text. Try a different topic.",
   notEnoughQuestions: "Couldn't make enough questions from this article.",
   serviceUnavailable: 'The question service is unavailable right now. Please try again.',
 } as const
@@ -51,6 +55,20 @@ export type PipelineResult =
   /** `sourceUsed` is the trimmed text the model saw and the passages were validated against. */
   | { ok: true; title: string; sourceUsed: string; questions: Question[]; log: string[] }
   | { ok: false; userMessage: UserMessage; log: string[] }
+
+/**
+ * A topic room's version of a pipeline result. The page was picked by the
+ * search, not the host, so the two "this page" failures (tooLittleText,
+ * pageUnreachable) become topicArticleUnusable. Everything else, success
+ * included, is returned unchanged. Link rooms don't use this.
+ */
+export function topicRoomResult(result: PipelineResult): PipelineResult {
+  if (result.ok) return result
+  if (result.userMessage !== USER_MESSAGES.tooLittleText && result.userMessage !== USER_MESSAGES.pageUnreachable) {
+    return result
+  }
+  return { ...result, userMessage: USER_MESSAGES.topicArticleUnusable }
+}
 
 function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)

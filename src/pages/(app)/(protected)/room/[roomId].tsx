@@ -16,6 +16,7 @@ import { useAuth, useMutations, useQuery } from 'deepspace'
 import { useAutoReveal, useGeneratingTooLong, useMsLeft } from '@/components/game/hooks'
 import { Leaderboard } from '@/components/game/Leaderboard'
 import { Lobby } from '@/components/game/Lobby'
+import { SourceLink } from '@/components/game/SourceLink'
 import { QuestionView } from '@/components/game/QuestionView'
 import { RevealView } from '@/components/game/RevealView'
 import { buttonVariants } from '@/components/ui'
@@ -102,7 +103,10 @@ export default function RoomPage() {
   } else if (room.status === 'finished') {
     body = (
       <div data-testid="finished" className="space-y-6">
-        <h1 className="text-2xl font-bold">Game over</h1>
+        <div className="space-y-2">
+          <h1 className="text-2xl font-bold">Game over</h1>
+          <SourceLink room={room} />
+        </div>
         <Leaderboard players={players.records} userId={userId} />
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link to="/create" className={buttonVariants({ className: 'flex-1' })}>
