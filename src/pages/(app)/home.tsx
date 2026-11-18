@@ -7,6 +7,7 @@
  */
 
 import { useAuthProfileReady } from 'deepspace'
+import { ReturnToRoomLink } from '@/components/game/ReturnToRoomLink'
 import { APP_NAME } from '../../constants'
 
 export default function HomePage() {
@@ -21,7 +22,12 @@ export default function HomePage() {
         <code>src/themes.css</code>.
       </p>
       {isSignedIn && user && (
-        <p className="text-sm text-muted-foreground">Signed in as {user.name ?? user.email}</p>
+        <>
+          <p className="text-sm text-muted-foreground">Signed in as {user.name ?? user.email}</p>
+          <div className="w-full max-w-md">
+            <ReturnToRoomLink />
+          </div>
+        </>
       )}
     </div>
   )

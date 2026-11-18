@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom'
 import { useMutations } from 'deepspace'
 import { Button, Input, Label } from '@/components/ui'
 import { callAction } from '@/lib/call-action'
+import { ReturnToRoomLink } from '@/components/game/ReturnToRoomLink'
 
 export default function JoinRoomPage() {
   const navigate = useNavigate()
@@ -32,6 +33,7 @@ export default function JoinRoomPage() {
   return (
     <div className="min-h-full text-foreground">
       <form onSubmit={handleJoin} className="mx-auto max-w-md px-6 py-20">
+        <ReturnToRoomLink />
         <h1 className="mb-8 text-3xl font-bold tracking-tight">Join a game</h1>
         <Label htmlFor="room-code">Room code</Label>
         <Input

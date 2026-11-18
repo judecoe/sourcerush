@@ -211,3 +211,52 @@ Not verified / risks:
 - membership-resubscribe: since non-members no longer see the player list, its L54 now fails because the room row (pre-existing) never arrives, not only the player rows. Same SDK bug, slightly different symptom.
 - The countdown uses the device clock; a skewed phone shows a wrong countdown (the server still enforces endsAt).
 - `answeredCount` is display-only; the "everyone answered" early reveal trigger uses it, but the server recounts submissions before allowing it.
+
+## 2026-11-18 — "Return to your room" link + finished-screen buttons
+
+Did:
+- Checked before coding (approved): a `'team'` query on `rooms` is filtered in SQL by `executeTableQuery` (`server.js` L5280–5296) to `roomId IN (caller's active team_members.teamId) OR _created_by = caller`. Live updates go through `checkPermissionLevel` (L4092) with the same rule. `where` is equality only, so the status filter runs on the client. "Most recent" = envelope `createdAt` (server-set `_created_at`).
+- New `src/components/game/ReturnToRoomLink.tsx`: `useQuery('rooms', { orderBy: 'createdAt', orderDir: 'desc', limit: 20 })`, sorted again by `createdAt` on the client, picks the first room whose status is not `finished`/`failed` (so `generating` counts), and links to `/room/<roomId>` with its code. Renders nothing otherwise.
+- Used on `/create` (`create.tsx`), `/join` (`join.tsx`), and `/home` (`home.tsx`, signed-in only). `/` (`src/pages/index.tsx`) stays static and untouched, as agreed.
+- `room/[roomId].tsx` finished view: "Host a new game" (→ `/create`) and "Back to home" (→ `/home`) as plain `<Link>`s styled with `buttonVariants`. No server calls.
+- `tests/game-ui.spec.ts`: the single test now plays the whole game (renamed "a full game through the UI", timeout 150 s → 240 s). After Q2: Next → Q3; host goes to `/create`, sees the link with this room's code, clicks it, and lands back on Q3 (same prompt, choices enabled). Then Q3 through the last question: all three answer, so each round closes early. Then all three see the finished screen with both links (hrefs checked); host clicks "Host a new game" → `/create`, waits for Create room to be enabled, and checks no link shows this room's code.
+- No schema, action, permission, scoring or state-machine changes. No new accounts (reuses `sourcerush-ui`).
+
+Verified (local dev):
+- `npx tsc --noEmit`, `npx eslint .`: clean. `npx vitest run`: 22/22.
+- game-ui.spec alone: before the change 25.3 s (whole command 33.2 s). After: 28.9 s and 28.1 s (36.6 s / 36.0 s whole command). In the full suite: 30.0 s and 30.6 s. **≈ +3–4 s.** Rounds close early, so 6 extra rounds cost little.
+- The worker log shows 9 `openQuestion` calls from the UI host per run (8 questions + the one that sets `finished`).
+- `npx deepspace test run all`, twice:
+  - Run 1: 17 passed, 1 failed: `collab.spec.ts:65` (the known scaffold flake). membership-resubscribe ✘ is its expected `test.fail()`.
+  - Run 2: 18 passed, 0 failed.
+- `git grep --untracked -n -i "password" -- src tests`: 6 hits, all `--password-stdin` instructions or comments; no secrets.
+
+Not verified / risks:
+- **The finished check is weaker than specified.** The first run with a strict `toHaveCount(0)` failed: the host still belongs to room `4GRFN5` (`c2c7a215…`), left in `reveal` by an earlier game-ui run. Local dev state persists in `.wrangler/state`, and every run before this change ended mid-game. The link correctly pointed there. The test now asserts that no link shows *this* room's code. This room is the host's newest, so if finished rooms weren't skipped, the link would show it. A strict check would need old rooms cleared (e.g. a local state wipe), and any future failed run would leave another active room.
+- ~~That absence check can pass too early if the rooms query hasn't loaded yet.~~ Fixed in the next entry: the test now waits for a `return-link-ready` marker.
+- Known edge (accepted): only the 20 newest rooms are fetched (the default query limit is 50, so "no limit" wouldn't be exact either). A user with ≥20 newer ended rooms won't see an older active room's link; its URL and join code still work.
+- The link on `/join` and `/home` was checked by reading the code and by tsc only; the spec exercises only `/create`. Not checked on a phone-width viewport.
+- Abandoned rooms: as of the next entry, rooms whose `createdAt` is more than 2 hours old no longer show the link (`ROOM_LINK_MAX_AGE_MS`, display only). The room itself still stays in its status; nothing ends abandoned rooms server-side.
+
+## 2026-11-18 — Return link: loaded marker + 2-hour cutoff
+
+Did:
+- `src/components/game/ReturnToRoomLink.tsx`: renders a hidden `<span data-testid="return-link-ready" hidden />` once the rooms query's status is `'ready'` (with or without a link). New constant `ROOM_LINK_MAX_AGE_MS = 2 h`: rooms whose envelope `createdAt` is older are skipped. Display only; no record changes.
+- `tests/game-ui.spec.ts`: before the negative check on `/create`, waits for `return-link-ready` (`toBeAttached`) instead of the Create room button being enabled.
+- Updated the known-edges bullets in the previous entry.
+- (I briefly ran `npx prettier --write` on the component; with no repo config it switched it to double quotes + semicolons. I rewrote it in the repo style by hand; tsc/eslint below are on the final file.)
+
+Verified (local dev):
+- `npx tsc --noEmit`, `npx eslint .`: clean. `npx vitest run`: 22/22.
+- `npx deepspace test run tests/game-ui.spec.ts` twice: passed both (test 28.2 s / 27.9 s; command 36.1 s / 34.2 s).
+- `npx deepspace test run all` once: 17 passed, 1 failed: `collab.spec.ts:65`, the known scaffold flake. membership-resubscribe ✘ is its expected `test.fail()`. game-ui passed (30.6 s).
+
+Known edges (current):
+- Only the 20 newest rooms are fetched (the server default limit is 50 anyway). If a user has ≥20 newer rooms that have all ended, an older active room doesn't show; its URL and join code still work.
+- Abandoned rooms drop off the link after 2 hours (by `createdAt`, so a game that legitimately runs past 2 h would also lose its link). The room itself still stays in its status.
+- The cutoff uses the device clock: a skewed clock shifts it.
+
+Not verified / risks:
+- No test covers the 2-hour cutoff (it would need a room more than 2 h old or a controllable clock). Checked by reading the code only.
+- The 2-hour cutoff can also hide the old rooms that made the strict "no link" check fail last time, so a strict check might now pass. I didn't switch back to it; the spec still checks only this game's code.
+- `/join` and `/home` still aren't covered by the spec.

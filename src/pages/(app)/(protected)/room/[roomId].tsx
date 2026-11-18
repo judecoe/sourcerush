@@ -18,6 +18,7 @@ import { Leaderboard } from '@/components/game/Leaderboard'
 import { Lobby } from '@/components/game/Lobby'
 import { QuestionView } from '@/components/game/QuestionView'
 import { RevealView } from '@/components/game/RevealView'
+import { buttonVariants } from '@/components/ui'
 import type { Player, Question, Room, Submission } from '@/components/game/types'
 
 export default function RoomPage() {
@@ -86,6 +87,14 @@ export default function RoomPage() {
       <div data-testid="finished" className="space-y-6">
         <h1 className="text-2xl font-bold">Game over</h1>
         <Leaderboard players={players.records} userId={userId} />
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Link to="/create" className={buttonVariants({ className: 'flex-1' })}>
+            Host a new game
+          </Link>
+          <Link to="/home" className={buttonVariants({ variant: 'outline', className: 'flex-1' })}>
+            Back to home
+          </Link>
+        </div>
       </div>
     )
   } else if (!question || !questionId) {

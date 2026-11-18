@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom'
 import { useMutations } from 'deepspace'
 import { Button } from '@/components/ui'
 import { callAction } from '@/lib/call-action'
+import { ReturnToRoomLink } from '@/components/game/ReturnToRoomLink'
 
 export default function CreateRoomPage() {
   const navigate = useNavigate()
@@ -31,6 +32,7 @@ export default function CreateRoomPage() {
   return (
     <div className="min-h-full text-foreground">
       <div className="mx-auto max-w-md px-6 py-20">
+        <ReturnToRoomLink />
         <h1 className="mb-2 text-3xl font-bold tracking-tight">Host a game</h1>
         <p className="mb-8 text-sm text-muted-foreground">
           You'll get a 6-character code to share with players.

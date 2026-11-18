@@ -1,7 +1,9 @@
 /**
  * The game UI, played entirely through the browser: create, join, start,
- * answer, refresh mid-question, automatic reveal, Next, and a round that
- * closes on time with nobody answering.
+ * answer, refresh mid-question, automatic reveal, Next, a round that
+ * closes on time with nobody answering, the host leaving mid-question and
+ * returning via the "Return to your room" link, then playing to the
+ * finished screen (Host a new game / Back to home; the link is gone).
  *
  * Accounts: host (also plays), p1, p2. They are this spec's own accounts
  * (label `sourcerush-ui`), so no other spec acts as the same users.
@@ -36,8 +38,8 @@ async function readChoices(page: Page): Promise<string[]> {
   return choices
 }
 
-test('one round through the UI, then a round that closes on time', async ({ users }) => {
-  test.setTimeout(150_000)
+test('a full game through the UI', async ({ users }) => {
+  test.setTimeout(240_000)
   const [host, p1, p2] = await users(3, { label: LABEL })
   const everyone = [host, p1, p2]
 
@@ -126,4 +128,54 @@ test('one round through the UI, then a round that closes on time', async ({ user
     await expect(u.page.getByTestId('reveal-passage')).toContainText(fixture2.passage, { timeout: 35_000 })
     await expect(u.page.getByTestId('my-result')).toHaveText('No answer')
   }
+
+  // --- Question 3: the host leaves mid-question and comes back via the link ---
+  await host.page.getByRole('button', { name: 'Next' }).click()
+  for (const u of everyone) {
+    await expect(u.page.getByText('Question 3')).toBeVisible({ timeout: 15_000 })
+  }
+  const prompt3 = ((await host.page.getByTestId('question-prompt').textContent()) ?? '').trim()
+  await host.page.goto('/create')
+  const link = host.page.getByTestId('return-to-room')
+  await expect(link).toContainText('Return to your room', { timeout: 15_000 })
+  await expect(link).toContainText(code)
+  await link.click()
+  await host.page.waitForURL(`**/room/${roomId}`)
+  // Back in the same open question, still able to answer.
+  await expect(host.page.getByTestId('question-prompt')).toHaveText(prompt3, { timeout: 15_000 })
+  await expect(host.page.getByText('Question 3')).toBeVisible()
+  await expect(host.page.getByTestId('choice-0')).toBeEnabled()
+
+  // --- Questions 3 to the last: everyone answers, so each round closes early ---
+  for (let n = 3; ; n++) {
+    for (const u of everyone) {
+      await expect(u.page.getByText(`Question ${n}`)).toBeVisible({ timeout: 15_000 })
+      await u.page.getByTestId('choice-0').click()
+      await expect(u.page.getByTestId('locked-choice')).toBeVisible()
+    }
+    for (const u of everyone) {
+      await expect(u.page.getByTestId('reveal-passage')).toBeVisible({ timeout: 15_000 })
+    }
+    await host.page.getByRole('button', { name: 'Next' }).click()
+    // Next either opens question n + 1 or, after the last one, ends the game.
+    const next = host.page.getByText(`Question ${n + 1}`).or(host.page.getByTestId('finished'))
+    await expect(next).toBeVisible({ timeout: 15_000 })
+    if (await host.page.getByTestId('finished').isVisible()) break
+  }
+
+  // --- Finished: both buttons, and the link is gone ---
+  for (const u of everyone) {
+    await expect(u.page.getByTestId('finished')).toBeVisible({ timeout: 15_000 })
+    await expect(u.page.getByRole('link', { name: 'Host a new game' })).toHaveAttribute('href', '/create')
+    await expect(u.page.getByRole('link', { name: 'Back to home' })).toHaveAttribute('href', '/home')
+  }
+  await host.page.getByRole('link', { name: 'Host a new game' }).click()
+  await host.page.waitForURL('**/create')
+  // Wait until the rooms query has loaded before checking for absence.
+  await expect(host.page.getByTestId('return-link-ready')).toBeAttached({ timeout: 15_000 })
+  // This room is the host's newest, so if finished rooms weren't skipped the
+  // link would show this code. We don't assert the link is absent: earlier
+  // runs that stopped mid-game leave the host in active rooms in the
+  // persisted local dev state, and the link rightly points to those.
+  await expect(host.page.getByTestId('return-to-room').filter({ hasText: code })).toHaveCount(0)
 })
