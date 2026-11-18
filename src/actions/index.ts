@@ -170,6 +170,11 @@ export const actions: Record<string, ActionHandler<Env>> = {
    * `params.fixture === 'broken'` uses a question set that always fails
    * validation. It exists only so tests can force the 'failed' path; it can
    * only fail the caller's own new room.
+   * TODO(Friday): remove `fixture: 'broken'` when the real pipeline lands.
+   * It is live in production too: DeepSpace documents no way for the worker
+   * to tell local dev from production. (`ALLOW_DEBUG_ROUTES` is set by
+   * `deepspace dev`/`test run`, but a deployment can opt into it, so it
+   * isn't a dev signal.)
    * TODO: take a sourceUrl and run Firecrawl + Anthropic instead of fixtures.
    */
   createRoom: async ({ userId, params, tools }) => {

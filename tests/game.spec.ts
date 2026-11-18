@@ -4,7 +4,9 @@
  * `callAction` and reads go through raw `core.subscribe` probes on each
  * user's authenticated records socket.
  *
- * Accounts: host (creates, not a player), p1 and p2 (players).
+ * Accounts: host (creates, not a player), p1 and p2 (players). They are
+ * this spec's own accounts (label `sourcerush-game`), so other specs running
+ * in parallel never act as the same users.
  */
 import { test, expect, loadAllTestAccounts } from 'deepspace/testing'
 import { FIXTURE_CANDIDATES } from '../src/lib/questions/fixtures'
@@ -12,8 +14,13 @@ import type { Question } from '../src/lib/questions/validate'
 import { QUESTION_DURATION_MS, scoreFor } from '../src/lib/scoring'
 import { act, openApp, tapRecordsSocket } from './helpers/game'
 
-const usable = loadAllTestAccounts().length
-test.skip(usable < 3, `Needs 3 usable test accounts, found ${usable}.`)
+const LABEL = 'sourcerush-game'
+const usable = loadAllTestAccounts().filter((a) => a.label === LABEL).length
+test.skip(
+  usable < 3,
+  `Needs 3 test accounts labelled ${LABEL}, found ${usable}. Create them with ` +
+    '`npx deepspace test accounts create --email <name>@deepspace.test --label sourcerush-game --password-stdin`.',
+)
 
 const FIXTURES = FIXTURE_CANDIDATES as Question[]
 const PASSAGES = FIXTURES.map((q) => q.passage)
@@ -27,7 +34,7 @@ function correctChoiceIndex(prompt: string, choices: string[]): number {
 }
 
 test('a pipeline failure leaves the room failed, not generating', async ({ users }) => {
-  const [host] = await users(1)
+  const [host] = await users(1, { label: LABEL })
   const tap = await tapRecordsSocket(host.page)
   await openApp(host.page)
 
@@ -53,7 +60,7 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   users,
 }) => {
   test.setTimeout(120_000)
-  const [host, p1, p2] = await users(3)
+  const [host, p1, p2] = await users(3, { label: LABEL })
   const hostTap = await tapRecordsSocket(host.page)
   const p1Tap = await tapRecordsSocket(p1.page)
   const p2Tap = await tapRecordsSocket(p2.page)

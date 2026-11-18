@@ -112,6 +112,8 @@ Verified (local dev / miniflare, not deployed):
 Known edges (accepted, not handled):
 - If the winning `revealQuestion` fails after creating its `reveal_locks` row, the room stays in `question` and no later call can reveal it (the lock is taken). Needs a manual fix today.
 - Two concurrent `openQuestion` calls (host double-click) both open the same next index: an upsert of the same question row, and `endsAt` moves by a few ms. Harmless but not prevented.
+- An in-flight submission (passed the `endsAt` check just before the deadline) that is written after a time-up reveal has re-read submissions is stored but scores 0.
+- Submission (and player) counts read one query page of at most 500 rows (`ROOM_QUERY_LIMIT`); larger rooms would undercount.
 
 Not verified / risks:
 - **Full-suite interaction (not caused by game logic, but new with this change):** in `npx deepspace test run all` (parallel workers), `membership-resubscribe.spec.ts` (marked `test.fail()` for the SDK `UserId` typo) *passed* in 3 of 3 runs, so the suite reports 1 failed. Alone it still fails as expected (2 of 2), and on the commit before this change the full suite was green. Diagnosed with temporary (reverted) listeners: no page reload, no new socket, and no server `records.resubscribe` frame; the watching page's own client re-sent its existing subscriptions (same subscriptionIds) and got the pre-existing rows. It coincides with game.spec using the same test account (the latecomer is p2 there) at the same time. I did NOT find what makes the client re-query. The SDK typo is still there (`server.js` L4431). Options for you: run e2e with 1 worker, give game.spec its own accounts, or drop `test.fail()` and assert nothing for that spec. I changed none of these.
@@ -122,3 +124,23 @@ Not verified / risks:
 - Admin (app owner) role reading `answerKeys`/`sources` is still untested (test accounts are non-owners).
 - `game.spec` relies on the test runner's Vite dev server to `import('/src/lib/call-action.ts')`; it won't run against a deployed build as is.
 - Clock: the late-submit test assumes the test and worker clocks agree (same machine). The rejection itself uses only the server clock.
+
+## 2026-11-17 — game.spec gets its own test accounts; dev-only check for `fixture: 'broken'`
+
+Did:
+- Created 3 test accounts, label `sourcerush-game`: `sourcerush-game-host@`, `sourcerush-game-p1@`, `sourcerush-game-p2@deepspace.test`, via `npx deepspace test accounts create --password-stdin` (passwords from `openssl rand`, never printed; stored in `~/.deepspace/test-accounts.json`, outside the repo). Account total is now 6/10.
+- `tests/game.spec.ts`: `users(n, { label: 'sourcerush-game' })`; the skip condition counts only accounts with that label. Other specs call `users(3)` with no label, which picks the 3 oldest accounts (`pickTestAccounts`, testing.d.ts), so they keep the original `sourcerush` accounts.
+- `fixture: 'broken'`: **no documented way for the worker to tell local dev from production**, so it stays as is with a TODO in `createRoom`. **It is removed when the real pipeline lands on Friday.** Looked at:
+  - docs: `llms.txt` index and `/guides/dev-workflow.md`, which mention nothing of the kind (`.dev.vars` is described only as local secret storage).
+  - `worker.ts` `Env` and `wrangler.toml` `[vars]`: no environment flag.
+  - `ALLOW_DEBUG_ROUTES` (closest candidate): `worker.d.ts` L1294–1300 says `deepspace dev start`/`test run` set it automatically, but also "Off unless a deployment opts in with `ALLOW_DEBUG_ROUTES=true`"; `cli.js` L13418–13420 warns when a deployed app enables it. So it means "debug API on", not "local dev". Not used.
+- AGENT_LOG: added two known edges to the previous entry (late in-flight submission scores 0; 500-row query limit).
+- `collab.spec.ts`: untouched (passed in both runs below).
+
+Verified (local dev):
+- `npx deepspace test run all`, twice: 17 passed both times. `membership-resubscribe.spec.ts` failed as expected (its `test.fail()` holds) in both runs, so the SDK issue still reproduces when no other spec shares its accounts. `game.spec` ran as the new host account (`hostId nHHK7…` in the failed-room log line). Unit tests 22/22 in both runs.
+- `npx tsc --noEmit`, `npx eslint .`: clean.
+
+Not verified / risks:
+- Two runs is a small sample for a flake that showed up in 3 of 3 runs before; the account split is the explanation that fits, but I did not re-instrument to prove the client re-query is gone.
+- The earlier root cause (why a concurrent session of the same account makes the client re-query) is still not found.
