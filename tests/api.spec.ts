@@ -6,6 +6,13 @@ test.describe('API tests', () => {
     expect(res.ok()).toBeTruthy()
   })
 
+  for (const action of ['createRoom', 'joinRoom']) {
+    test(`${action} refuses an unauthenticated call`, async ({ request }) => {
+      const res = await request.post(`/api/actions/${action}`, { data: { code: 'ABC234' } })
+      expect(res.status()).toBe(401)
+    })
+  }
+
   test('WebSocket endpoint exists', async ({ page }) => {
     // /home is a dynamic page (under src/pages/(app)/), so mounting it boots
     // the providers and auto-connects the records WebSocket. The static
