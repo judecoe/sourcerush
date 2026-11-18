@@ -77,7 +77,7 @@ test('create, join, live list, refresh, rejoin, and read isolation', async ({ us
 
   // Host creates a room.
   await host.page.goto('/create')
-  await host.page.getByRole('button', { name: 'Create room' }).click()
+  await host.page.getByRole('button', { name: 'Try it yourself' }).click()
   await host.page.waitForURL(/\/room\/[^/]+$/, { timeout: 15_000 })
   const roomId = host.page.url().split('/room/')[1]
   const code = (await host.page.getByTestId('room-code').textContent())?.trim() ?? ''

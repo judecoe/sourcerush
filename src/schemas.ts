@@ -18,6 +18,7 @@ import { answerKeysSchema } from './schemas/answer-keys-schema'
 import { sourcesSchema } from './schemas/sources-schema'
 import { submissionsSchema } from './schemas/submissions-schema'
 import { revealLocksSchema } from './schemas/reveal-locks-schema'
+import { roomQuotaSchema } from './schemas/room-quota-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
@@ -30,4 +31,5 @@ export const schemas: CollectionSchema[] = [
   sourcesSchema,
   submissionsSchema,
   revealLocksSchema,
+  roomQuotaSchema,
 ]

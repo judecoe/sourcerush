@@ -13,7 +13,7 @@
 import type { ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useAuth, useMutations, useQuery } from 'deepspace'
-import { useAutoReveal, useMsLeft } from '@/components/game/hooks'
+import { useAutoReveal, useGeneratingTooLong, useMsLeft } from '@/components/game/hooks'
 import { Leaderboard } from '@/components/game/Leaderboard'
 import { Lobby } from '@/components/game/Lobby'
 import { QuestionView } from '@/components/game/QuestionView'
@@ -35,6 +35,7 @@ export default function RoomPage() {
     orderDir: 'asc',
   })
   const room = rooms.records[0]?.data
+  const generatingTooLong = useGeneratingTooLong(rooms.records[0]?.createdAt, room?.status === 'generating')
 
   // The current question (its id is `${roomId}:${index}`, same as the server).
   const index = room?.currentIndex ?? -1
@@ -56,6 +57,12 @@ export default function RoomPage() {
 
   const isHost = !!room && !!userId && room.hostId === userId
 
+  const hostNewGameLink = (
+    <Link to="/create" className={buttonVariants({ className: 'mt-4' })}>
+      Host a new game
+    </Link>
+  )
+
   let body: ReactNode
   if (rooms.status === 'loading' || players.status === 'loading') {
     body = <p className="text-muted-foreground">Loading room…</p>
@@ -68,6 +75,18 @@ export default function RoomPage() {
         </Link>
       </div>
     )
+  } else if (room.status === 'generating' && generatingTooLong) {
+    // The job may still finish; if it does, this page moves to the lobby by itself.
+    body = (
+      <div data-testid="generating-too-long" className="rounded-lg border border-border bg-card p-6">
+        <p className="font-semibold">This is taking longer than expected.</p>
+        <p className="mt-2 text-sm text-muted-foreground">
+          The questions may still arrive, and this page will update if they do. Or start again with another
+          article.
+        </p>
+        {hostNewGameLink}
+      </div>
+    )
   } else if (room.status === 'generating') {
     body = <p data-testid="generating">Generating questions…</p>
   } else if (room.status === 'failed') {
@@ -75,9 +94,7 @@ export default function RoomPage() {
       <div data-testid="failed" className="rounded-lg border border-destructive p-6">
         <p className="font-semibold">This room couldn't be set up.</p>
         <p className="mt-2 text-sm">{room.errorMessage || 'Something went wrong.'}</p>
-        <Link to="/create" className="mt-4 inline-block text-sm underline underline-offset-4">
-          Try another room
-        </Link>
+        {hostNewGameLink}
       </div>
     )
   } else if (room.status === 'lobby') {

@@ -260,3 +260,176 @@ Not verified / risks:
 - No test covers the 2-hour cutoff (it would need a room more than 2 h old or a controllable clock). Checked by reading the code only.
 - The 2-hour cutoff can also hide the old rooms that made the strict "no link" check fail last time, so a strict check might now pass. I didn't switch back to it; the spec still checks only this game's code.
 - `/join` and `/home` still aren't covered by the spec.
+
+## 2026-11-18 — Research: wiring Firecrawl + Anthropic into createRoom (no code changed)
+
+Did: research only. No source files changed; only this log entry. Full answers and the proposed plan are in the session reply; the key findings with sources are below.
+
+Findings:
+1. Calling. Server actions call `tools.integration(endpoint, body)` (`node_modules/deepspace/dist/worker.d.ts:3508-3516`; implemented in `src/server/action-routes.ts:95-136`). The result is `{ success: true, data }` (the integration's body, no wrapper) or `{ success: false, error, code?, status?, details?, issues? }`.
+   - `firecrawl/scrape` (`npx deepspace integrations info firecrawl/scrape`): input `url` (required), `formats` (default `["markdown"]`), `onlyMainContent` (default true), `includeTags`, `excludeTags`, `waitFor`, `timeout`. Output `{ data, creditsUsed, costUsd }`. `data` is untyped in the schema, so the location of the markdown and title is not documented.
+   - `anthropic/chat-completion`: input `model` (string, default `claude-opus-5-5`), `max_tokens` (default 4096, minimum 1, no maximum stated), `messages` (user/assistant, content is a string or an array of blocks), `system`, `temperature` (0–1). The output schema is `null`: the response shape is undocumented. The input schema has no tools, response-format or JSON-mode field. Models: the integration lists none. Its billing note names `claude-haiku-5-5` and `claude-haiku-4-5`. The SDK agent catalog (`worker.d.ts:2360`) has opus-5-5, fable-5-1, sonnet-5-5 and haiku-5-5, but that catalog is for `createDeepSpaceAI`, not this integration.
+2. Secrets/billing. The proxy uses the platform's keys, so no secrets are needed (docs `/guides/external-apis` line 5). Billing is `'developer'` by default, which bills the owner via `APP_OWNER_JWT` (`src/integrations.ts`; `action-routes.ts:107-111`). Both endpoints are `per_actual_cost`, provider cost plus markup (`integrations list`). 100 credits = $1 (`/agents/web-search-image-generation-no-api-keys` line 15). The platform rate-limits only `google/*`, so the app must cap spend itself (`/guides/external-apis` line 121).
+3. Time limits. DeepSpace documents no maximum run time for a server action. The action route awaits the handler inline and gets no `executionCtx` or `waitUntil` (`action-routes.ts:67`). `waitUntil` is killed 30 s after the response (`/guides/background-jobs` line 7). The documented long-work pattern is JobRoom plus `enqueueJob` (same page), and `enqueueJob` takes a roomId to shard the queue (`worker.d.ts:1730-1746`). Jobs run serially per JobRoom (background-jobs line 103). The alarm limit is 15 min; orphaned rows are rescued after about 16 min, then retried or failed (lines 208-217). `apiWorkerFetch` sets no timeout (`worker.js:8065`). In `buildCronContext`, `records.create` takes no recordId (`worker.js`, `buildCronContext`), so job code cannot use it for our deterministic ids.
+4. Failure modes. Not documented per endpoint. The documented envelope: `status: 0` on transport failure, timeout or abort; `code` slugs such as `insufficient_credits` and `validation_failed` (`/guides/external-apis` lines 24-45). "Empty results are not errors" (line 143). `callIntegration` calls `res.json()`, which throws on a non-JSON error body (`action-routes.ts:131`).
+5. Testing. Mock only the external boundary (`/guides/testing` line 7). `page.route` cannot intercept server-side `tools.integration` calls. Test accounts have no credits (`/guides/external-apis` line 247), but developer-billed calls bill the owner, including in local dev (APP_OWNER_JWT, `buildCronContext` error text).
+
+Verified: `npx deepspace integrations list | info` (free, no login); read the docs pages above via curl, the .d.ts files and worker.js. No paid calls made.
+
+Not verified / risks:
+- The Anthropic and Firecrawl response shapes need one real `integrations invoke` each, which is paid and needs your OK.
+- Whether the action keeps running when the host closes or refreshes the tab mid-request is undocumented by DeepSpace (Cloudflare behavior, untested here).
+- Whether unknown body fields (e.g. JSON-mode options) are stripped or rejected by the proxy's validator is untested.
+
+## 2026-11-18 — Research round 2: job path checks, paid response-shape calls (no code changed)
+
+Did: research only. No source files changed; only this log entry. The revised plan is in the session reply.
+
+Findings:
+- (1a) `tools.integration` from a job. AppJobRoom gets the worker env (`worker.ts:69-81`, `runJob(job, context, this.env)`; `BaseRoom` stores it, `worker.js:256-258`). `createActionTools(env, …)` bills developer integrations with `env.APP_OWNER_JWT` and reaches the api-worker via `env.API_WORKER`/`API_WORKER_URL` (`action-routes.ts:107-130`). So a job's calls bill the app owner, the same as from an action. The docs agree: "Handlers run as the app owner … falls back to APP_OWNER_JWT and bills the developer" (`/guides/background-jobs` line 223), and the cron pattern makes the same call from inside a DO (`/guides/external-apis` lines 160-162). `.dev.vars` has APP_OWNER_JWT, API_WORKER_URL and OWNER_USER_ID (names checked, values not printed). Not yet run from a job.
+- (1c) Write identity. `tools.*` sends `X-User-Id: <userId>`, and an insert sets `_created_by` to it (`server.js` INSERT in `putRecord`, ~4700-4708). An update leaves `_created_by` unchanged (`server.js` UPDATE branch ~4690-4697 sets only `_updated_at` + columns). `'team'` read = creator OR team member (`server.js:4092-4097` `checkPermissionLevel`; the query form is `teamField IN (…) OR _created_by = ?`, `server.js:5288`). `false` returns before any owner check (`server.js:4080`). The job only creates `sources` and `answerKeys` (read: false) and updates `rooms`. Acting as `room.hostId` gives the same `_created_by` values as today.
+- Security finding: JobRoom sockets. `/ws/jobs/:roomId` takes any room id from the client (`src/server/realtime-routes.ts:169-171`). The scaffold's `authorizeWrite` allows role member/admin (`worker.ts:72-76`), and `ROLE_DEFAULT = "member"` (`worker.js:71`). So any signed-in user can enqueue, cancel or read jobs on any queue over the socket (`worker.js:4861-4890`). The server-side `/enqueue` (POST, from `enqueueJob`) runs no authorize check (`worker.js:4936-4961`), and the public route is GET only. Nothing in `src/` uses `useJobs` today.
+- Paid calls (approved; one each). Firecrawl: 1 credit, `costUsd: 0.0038`. Anthropic haiku-5-5: `costUsd: 0.0000078`.
+  - `firecrawl/scrape` on https://en.wikipedia.org/wiki/Tide (formats markdown, onlyMainContent). CLI output `{ ok, success, data }`, where `data` = the integration body `{ data: { markdown, metadata }, creditsUsed: 1, costUsd }`. Title: `data.data.metadata.title` ("Tide - Wikipedia"), also `ogTitle`. Status: `data.data.metadata.statusCode` (200). No plain-text field in the response. Markdown: 377,648 chars, starting "[Jump to content](https://en.wikipedia.org/wiki/Tide#bodyContent)\n\n[![Page semi-…" (truncated). A rough links/images/markers strip leaves ~154,535 chars. Wikipedia links carry parentheses in URLs plus titles: `[Tide (disambiguation)](/wiki/Tide_(disambiguation) "Tide (disambiguation)")`, which a `\([^)]*\)` regex leaves half-stripped.
+  - `anthropic/chat-completion`, model claude-haiku-5-5, max_tokens 40. `data` = Messages API shape: `content[0].type "text"`, `content[0].text` ("{\"ok\":true}"), `stop_reason "end_turn"`, `stop_sequence`, `usage.input_tokens 33`, `usage.output_tokens 9` (plus cache, thinking and totalTokens counts), `costUsd`. No `creditsUsed`.
+- Fixture: `FIXTURE_SOURCE.text` is 2,095 chars with no markdown characters (checked with a one-off `npx tsx`, run from the npx cache, not added to package.json).
+
+Verified: two `integrations invoke --yes --json` calls (outputs saved only in the session scratchpad); reads of worker.js/server.js/worker.ts/realtime-routes.ts/schemas cited above.
+
+Not verified / risks:
+- Inside an action, `tools.integration` returns the api-worker payload as-is (`action-routes.ts:131-135`). I'm inferring that the CLI's `success`/`data` are that same payload, so the paths would be `r.data.data.markdown` and `r.data.content[0].text`. First runtime check should confirm.
+- Real generation latency for 12 questions on haiku-5-5 was not measured; timeout values are estimates.
+
+## 2026-11-18 — Wire Firecrawl + Anthropic into createRoom (background job, quota, Try it yourself)
+
+Did:
+- New pure modules (no SDK imports):
+  - `src/lib/questions/markdown.ts`: `markdownToPlainText`.
+  - `src/lib/questions/responses.ts`: guarded readers for the two integration responses.
+  - `src/lib/questions/pipeline.ts`: `runQuestionPipeline(url, { scrape, generate })`, `MIN_ARTICLE_CHARS` = 2000, `GENERATE_ATTEMPTS` = 2, `USER_MESSAGES`.
+  - `src/lib/create-room-params.ts`: exactly one of `{ url }` (http/https, ≤ 2048 chars) or `{ sample: true }`.
+  - `src/lib/generation-timing.ts`: `SCRAPE_TIMEOUT_MS` 30 s, `GENERATE_TIMEOUT_MS` 60 s, `STALE_GENERATING_MS` 180 s.
+- `src/server/generation.ts` (new):
+  - `QUESTION_MODEL` = `claude-haiku-5-5`, `GENERATE_MAX_TOKENS` = 8000.
+  - `scrapeArticle` / `generateText`, real `tools.integration` calls with timeouts. They log duration, plus cost (scrape) or stop_reason, output_tokens and costUsd (generate). No content.
+  - `finishGeneration`, `storeQuestions`, `failRoom` and `questionRecordId` (moved here from actions), job type, queue id.
+- `src/jobs.ts`: the `generate-questions` handler. Acts as the host; exits without writing unless the room is still `generating`, checked before and after the pipeline; never rethrows.
+- `src/actions/index.ts`:
+  - `createRoom` validates params, then (url only) claims a `room_quota` slot (`ROOM_DAILY_LIMIT` = 10), sets up the room, then either enqueues the job (`room:${roomId}`, maxAttempts 1) or runs the sample pipeline inline.
+  - `fixture: 'broken'` and the old `generateQuestions` are removed.
+- `src/schemas/room-quota-schema.ts` (new) + `src/schemas.ts`.
+- `src/server/action-routes.ts`: `export` on `createActionTools`, plus a comment (the planned diff).
+- `worker.ts`: `AppJobRoom` uses `authorizeWrite`/`authorizeRead: async () => false`; the unused `resolveAppRole` import is removed.
+- `src/lib/questions/fixtures.ts`: `SAMPLE_PIPELINE_DEPS`; comments updated.
+- Pages:
+  - `create.tsx`: URL field + "Create room", plus "Try it yourself".
+  - `room/[roomId].tsx`: "taking longer than expected" after 180 s (`useGeneratingTooLong` in `src/components/game/hooks.ts`); the failed screen gets the same "Host a new game" button.
+- Tests:
+  - New `markdown.test.ts`, `pipeline.test.ts` (incl. readers, the res.json() throw, malformed responses, timing inequality), `create-room-params.test.ts`.
+  - `fixtures.test.ts`: sample text is ≥ MIN and unchanged by cleanup.
+  - `game.spec.ts`: the broken-fixture test is replaced by a refusal test and a job-socket test; the sample path is used; `room_quota` is added to the probes.
+  - `game-ui` / `lobby` / `membership-resubscribe` specs click "Try it yourself".
+- `CLAUDE.md`: collections table, status note, createRoom, pipeline and testing sections.
+
+Verified (local dev):
+- `npx tsc --noEmit -p .` (covers src + worker.ts): clean. `npx eslint .`: clean. `npx vitest run`: 51/51.
+- `npx deepspace test run all`: exit 0, 19 passed. membership-resubscribe ✘ is its expected `test.fail()`; collab.spec.ts:65 passed this run. An earlier full run failed only on the new job-socket test, fixed below.
+- No spec reached an integration or a job: the suite log has 0 lines for `[generate] room`, firecrawl, chat-completion and generate-questions.
+- Job-socket test (`game.spec.ts` "no client can read or write a job queue"):
+  - A signed-in user's raw socket to `/ws/jobs/room:probe` gets `auth canWrite:false`, an empty snapshot, and `core.error "Write access denied…"` on `job.enqueue`.
+  - Proved non-vacuous: with the scaffold-style `authorizeWrite` temporarily restored, the same test failed (`canWrite:true`, job enqueued, then "Unknown job type"). The lockdown was put back; `worker.ts:80-81` checked afterwards.
+  - The test uses a made-up job type, so it can never spend credits. The experiment left one terminal job row in local dev's `room:probe` queue (pruned after 24 h).
+- `markdownToPlainText` run once over the saved real Wikipedia scrape (143k chars of text): 0 leftover `](`, `![`, `**` or backslash escapes.
+- Amendment 2: `normalize()` collapses all whitespace incl. newlines (`src/lib/questions/validate.ts:51`), applied to the source (l. 77) and to each passage (l. 131). So kept paragraph breaks don't block a match.
+
+Recorded per your notes:
+- `room_quota` read: false is verified from the schema (`src/schemas/room-quota-schema.ts`), not by tests. The `room_quota` probe in game.spec passes vacuously, because no spec creates quota rows.
+- The quota loop treats any failed slot create as taken, not only the immutable rejection. It fails closed: an outage can show "limit reached" early but can never let anyone exceed the limit.
+- Job-queue read lockdown: the empty snapshot in the test is vacuous (that queue held no jobs). The read denial is verified by code reading (`authorizeRead: false` → `jobSnapshot([])`, worker.js:4855). The write denial has real test evidence.
+
+Differed from the plan:
+- `markdownToPlainText` got one extra rule, dropping backslash escapes. The real Wikipedia scrape has `\[1\]` on every footnote (266 of them). Footnote markers are kept as `[1]` text, not removed.
+- The job-socket test is 34 lines, not ~20. The token in the records-socket URL is rejected by `/ws/jobs` (close 1006), so the test takes the JWT from a refused `createRoom({})` request's Authorization header, and handles open/close.
+- Helpers moved to `src/server/generation.ts` instead of being exported from `actions/index.ts`. The response readers and timing constants got their own small files.
+- Firecrawl is also sent `timeout: 25000`. The room title falls back to the URL if the page has none. `sources.fullText` now stores the whole cleaned article (can be ~140k chars), not the trimmed `sourceUsed`.
+
+Not verified / risks (manual checks):
+- The real URL path end to end: never run. The response paths inside an action (`r.data.data.markdown`, `r.data.content[0].text`) are inferred from CLI output; if wrong, the room fails with serviceUnavailable and the log names the path.
+- Haiku latency and token use for 12 questions (60 s / 8000 are estimates). Question yield on real articles (footnote markers in passages).
+- Quota at the limit (11th link room in a UTC day), the day rollover, and the limit message.
+- The 180 s stale message and a late flip to lobby. The failed screen with real errors: 404 page, short/paywalled page, out of credits.
+- The enqueue-failure path, a worker dying mid-job, the `withTimeout` behaviour (not unit tested), and the job's log lines in a real run.
+- The create page's URL form (specs use only Try it yourself); phone-width layout.
+- Nothing committed or deployed.
+
+## 2026-11-18 — Footnote markers removed; sources.fullText = sourceUsed
+
+Did:
+- `src/lib/questions/markdown.ts`: new step 0b, right after the backslash-unescape. Removes `[digits]` footnote markers (`/\[\d+\]/g`). A linked marker `[[1]](#cite_note-1)` becomes `[](#…)`, which the link step then removes.
+- `markdown.test.ts`: the escaped/linked marker test now expects removal; new tests for adjacent `[12][13]` and for non-numeric brackets (`[later …]`, `[a]`, `[1871a]`) left alone.
+- `src/lib/questions/pipeline.ts`: the ok result returns `sourceUsed` (from `buildQuestionPrompt`) instead of the whole cleaned `text`.
+- `src/server/generation.ts`: `storeQuestions` writes `fullText: result.sourceUsed`, with a comment saying why.
+- `pipeline.test.ts`:
+  - The sample path's `sourceUsed` equals the whole fixture text (2,095 chars < `MAX_SOURCE_CHARS`), so the sample behaves as before.
+  - New test: an over-long article returns exactly `MAX_SOURCE_CHARS` chars, a prefix of the cleaned text.
+- `CLAUDE.md`: the `sources` row says `fullText` holds `sourceUsed`, and why (stored passages are always findable in it).
+
+Verified (local dev):
+- tsc clean, eslint clean, vitest 54/54.
+- The real Wikipedia scrape after cleanup: 0 `[digits]` left, and no leftover link, image or escape syntax.
+- `npx deepspace test run all`: 18 passed, 1 failed, `collab.spec.ts:65` (the known scaffold flake). membership-resubscribe ✘ is its expected `test.fail()`. Re-ran `tests/collab.spec.ts` alone: 3/3 passed.
+- The suite log has 0 integration or job lines.
+
+Not verified / risks:
+- `[digits]` removal also drops a genuine bracketed number in article text (e.g. a quoted "[3]" that isn't a footnote). It's rare, and removing it can't break validation, because passages are matched against the same cleaned text.
+- The real URL path is still unrun (see the previous entry's manual list). Nothing committed or deployed; `.DS_Store` left untouched.
+
+## 2026-11-18 — Anthropic reader: collect every text block (first real run failed)
+
+Real-run evidence (your first real run, Wikipedia article; reported by you, from the job's log lines):
+- Scrape OK in 1739 ms.
+- Generate attempt 1: 28089 ms, `stop_reason end_turn`, `output_tokens 7677`, then failed with "response has no string at data.content[0].text".
+- So `stop_reason`/`usage` sit where expected, but `content[0]` was not a text block. The reader failed closed as designed: the room went to failed with serviceUnavailable instead of throwing.
+
+Did:
+- `src/lib/questions/responses.ts`, `readGenerateResponse`:
+  - Collects every block with `type === 'text'` (and a string `text`) and joins them in order with no separator.
+  - Non-text blocks are skipped. No text block → `response has no text block in data.content (types: …)`; content missing or not an array → `response has no array at data.content`.
+  - The metrics line, logged once per attempt by `generateText`, now ends with `content types: <comma-separated types>, text chars <length of extracted text>`. Types and length only, never contents.
+  - Header shape note updated.
+- `pipeline.test.ts`:
+  - New tests: text in the first block; a `thinking` block before the text block; two text blocks joined (with a thinking block between); no text block (fails, log names the types, contents absent from log and metrics); content missing / a string / an object / null body.
+  - Updated: the existing metrics and empty-content assertions, and the malformed-response pipeline test.
+- `CLAUDE.md`: the `responses.ts` line describes the new rule.
+- `GENERATE_MAX_TOKENS` unchanged (8000), as asked.
+
+Verified: `npx tsc --noEmit -p .` clean, `npx eslint .` clean, `npx vitest run` 58/58. The Playwright suite was not run (the change is in a pure module that no spec reaches).
+
+Not verified / risks:
+- What the non-text block at content[0] actually was. The next real run's "content types" line will show it.
+- Whether 7677 output tokens include thinking: if they do, the 8000 limit leaves little room for the JSON. That's for the next run to decide.
+- Joining text blocks with '' assumes they are one continuous answer. If the model splits its JSON around a non-text block in some other way, parsing could fail; the pipeline then regenerates once.
+
+## 2026-11-18 — Real runs after the reader fix; GENERATE_MAX_TOKENS 8000 → 12000
+
+Real-run evidence (local dev, Wikipedia articles; log lines pasted by you):
+- Room eb026041…: job done in 24068 ms -> lobby. Attempt 1 rejected 1 question ("passage not found in source"), so 11 of 12 were usable. The game played 11 rounds (11 submit/reveal pairs; the 12th openQuestion finished it). The scrape/generate metrics lines for this run weren't in the paste.
+- Room e39bffce…:
+  - Scrape 1057 ms, creditsUsed 1, costUsd 0.0038.
+  - Generate attempt 1: 19637 ms, stop_reason end_turn, output_tokens 5003, costUsd 0.0035865, content types: thinking,text, text chars 8420.
+  - Job done in 20777 ms -> lobby. No rejections; 12 rounds played.
+- Together with the first run (7677 output_tokens, 28089 ms; that run failed on the old reader):
+  - `output_tokens` includes thinking. The 8420 chars of JSON are ~2.1–2.4k tokens, so ~2.6–2.9k of the 5003 were thinking.
+  - The first run reached 96% of the 8000 cap. Thinking varies run to run, so 8000 risked truncated JSON (stop_reason max_tokens → parse failure → regenerate, or a failed room).
+  - Throughput observed: ~250–270 output tokens/s.
+- Cost per room ≈ $0.0074 (scrape $0.0038 + generate $0.0036). At ROOM_DAILY_LIMIT 10, ≈ $0.07 per user per day, about double if every room regenerates.
+
+Did:
+- `src/server/generation.ts`: `GENERATE_MAX_TOKENS` 8000 → 12_000; the comment now records why (thinking counts, the real token counts, and the ~48 s worst case at the observed rate, inside `GENERATE_TIMEOUT_MS` 60 s).
+- No change to question count, timeouts or STALE_GENERATING_MS. The integration's input schema has no thinking control (model, max_tokens, messages, system, temperature only).
+
+Verified: tsc clean, eslint clean, vitest 58/58. Playwright not run (no spec reaches this constant).
+
+Not verified / risks:
+- No real run yet at 12000. A run whose thinking pushes output near 12000 would take ~45–48 s at the observed rate. A slower day could exceed the 60 s timeout; that fails the room with serviceUnavailable rather than hanging.
+- Whether a higher max_tokens reserves more credits up front on this integration is undocumented. Billing is by actual usage.

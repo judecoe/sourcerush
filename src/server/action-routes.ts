@@ -69,7 +69,12 @@ export function registerActionRoutes(app: Hono<AppContext>, resolveAuth: Resolve
   })
 }
 
-function createActionTools(env: Env, userId: string, callerJwt: string): ActionTools {
+/**
+ * Also used by the question job (src/jobs.ts), which acts as the room's host
+ * and passes '' for callerJwt: it calls only developer-billed integrations,
+ * which use APP_OWNER_JWT. A 'user'-billed call with '' fails closed.
+ */
+export function createActionTools(env: Env, userId: string, callerJwt: string): ActionTools {
   const stub = env.RECORD_ROOMS.get(env.RECORD_ROOMS.idFromName(`app:${env.DEEPSPACE_APP_ID}`))
 
   // The DO returns ActionResult<unknown>; callers below supply the precise

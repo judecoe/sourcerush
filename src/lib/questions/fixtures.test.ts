@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BROKEN_FIXTURE_CANDIDATES, FIXTURE_CANDIDATES, FIXTURE_SOURCE } from './fixtures'
+import { markdownToPlainText } from './markdown'
+import { MIN_ARTICLE_CHARS } from './pipeline'
 import { prepareQuestions } from './prepare'
 import { buildQuestionPrompt } from './prompt'
 import { validateQuestions, type Question } from './validate'
@@ -21,6 +23,12 @@ describe('fixtures', () => {
       const original = FIXTURE_CANDIDATES[i] as Question
       expect(q.choices[q.correctIndex]).toBe(original.choices[original.correctIndex])
     })
+  })
+
+  it('the sample article is long enough and unchanged by markdown cleanup', () => {
+    const cleaned = markdownToPlainText(FIXTURE_SOURCE.text)
+    expect(cleaned).toBe(FIXTURE_SOURCE.text.trim())
+    expect(cleaned.length).toBeGreaterThanOrEqual(MIN_ARTICLE_CHARS)
   })
 
   it('the broken set fails with a reason for every question', () => {

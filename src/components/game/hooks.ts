@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { callAction } from '@/lib/call-action'
+import { STALE_GENERATING_MS } from '@/lib/generation-timing'
 
 /** Milliseconds until `endsAt` by this device's clock, never below 0. Ticks 4x a second. */
 export function useMsLeft(endsAt: number | undefined): number {
@@ -19,6 +20,29 @@ export function useMsLeft(endsAt: number | undefined): number {
   }, [endsAt])
 
   return endsAt === undefined ? 0 : Math.max(0, endsAt - now)
+}
+
+/**
+ * True once a room has been 'generating' for longer than
+ * STALE_GENERATING_MS since its `createdAt` (server time, compared with this
+ * device's clock). Display only: one timer re-renders at the threshold.
+ */
+export function useGeneratingTooLong(createdAt: string | undefined, generating: boolean): boolean {
+  const [now, setNow] = useState(() => Date.now())
+  const deadline = createdAt ? new Date(createdAt).getTime() + STALE_GENERATING_MS : undefined
+
+  useEffect(() => {
+    if (!generating || deadline === undefined) return
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      setNow(Date.now())
+      return
+    }
+    const timer = setTimeout(() => setNow(Date.now()), remaining + 100)
+    return () => clearTimeout(timer)
+  }, [generating, deadline])
+
+  return generating && deadline !== undefined && now >= deadline
 }
 
 const REVEAL_ATTEMPTS = 5

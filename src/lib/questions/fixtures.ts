@@ -1,13 +1,15 @@
 /**
- * Hardcoded source + questions, used by createRoom until the real
- * Firecrawl + Anthropic pipeline is wired in. The article is original and
- * fictional (written for this project), so there are no copyright or
- * accuracy concerns.
+ * Hardcoded source + questions for the "Try it yourself" room
+ * (`createRoom({ sample: true })`), which runs the real pipeline with
+ * SAMPLE_PIPELINE_DEPS below instead of Firecrawl + Anthropic. The article
+ * is original and fictional (written for this project), so there are no
+ * copyright or accuracy concerns.
  *
  * Every `passage` must appear verbatim in `FIXTURE_SOURCE.text`;
  * fixtures.test.ts checks that all 8 pass validateQuestions.
  */
 
+import type { PipelineDeps } from './pipeline'
 import type { PromptInput } from './prompt'
 
 export const FIXTURE_SOURCE: PromptInput = {
@@ -141,9 +143,20 @@ export const FIXTURE_CANDIDATES: unknown[] = [
 
 /**
  * A deliberately broken set: every passage is invented, so all fail
- * validation. Used only to test that createRoom marks the room 'failed'.
+ * validation. Test data for pipeline.test.ts and fixtures.test.ts only.
  */
 export const BROKEN_FIXTURE_CANDIDATES: unknown[] = FIXTURE_CANDIDATES.map((c) => ({
   ...(c as Record<string, unknown>),
   passage: 'This sentence does not appear anywhere in the source article.',
 }))
+
+/**
+ * Fake scrape + generate for the "Try it yourself" room: no API calls, no
+ * cost. They return the fixture article and candidates in the same shapes
+ * the real integrations produce, so the sample goes through the same
+ * cleanup, validation and shuffle as a real article.
+ */
+export const SAMPLE_PIPELINE_DEPS: PipelineDeps = {
+  scrape: async () => ({ ok: true, title: FIXTURE_SOURCE.title, markdown: FIXTURE_SOURCE.text }),
+  generate: async () => ({ ok: true, text: JSON.stringify({ questions: FIXTURE_CANDIDATES }) }),
+}

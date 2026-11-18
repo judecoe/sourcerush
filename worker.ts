@@ -14,7 +14,6 @@ import {
   JobRoom,
   PresenceRoom,
   RecordRoom,
-  resolveAppRole,
   workerErrorHandler,
   YjsRoom,
 } from 'deepspace/worker'
@@ -65,15 +64,21 @@ export class AppCronRoom extends CronRoom<Env> {
   }
 }
 
-/** Runs durable background work defined in src/jobs.ts. */
+/**
+ * Runs durable background work defined in src/jobs.ts.
+ *
+ * Closed to every client socket (`/ws/jobs/:roomId` accepts any queue id,
+ * and every signed-in user is a 'member' by default). Otherwise anyone could
+ * queue a paid 'generate-questions' job for another room, bypassing the
+ * room_quota cap, or cancel a host's job. Only server code enqueues, via
+ * `enqueueJob`, which goes through the room's internal `/enqueue` endpoint
+ * and is not subject to these checks.
+ */
 export class AppJobRoom extends JobRoom<Env> {
   constructor(state: DurableObjectState, env: Env) {
     super(state, env, {
-      authorizeWrite: async (user) => {
-        if (user.userId.startsWith('anon-')) return false
-        const role = await resolveAppRole(env, user.userId)
-        return role === 'member' || role === 'admin'
-      },
+      authorizeWrite: async () => false,
+      authorizeRead: async () => false,
     })
   }
 

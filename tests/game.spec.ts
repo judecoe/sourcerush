@@ -33,27 +33,51 @@ function correctChoiceIndex(prompt: string, choices: string[]): number {
   return choices.indexOf(fixture.choices[fixture.correctIndex])
 }
 
-test('a pipeline failure leaves the room failed, not generating', async ({ users }) => {
+test('createRoom refuses bad input before creating anything', async ({ users }) => {
   const [host] = await users(1, { label: LABEL })
-  const tap = await tapRecordsSocket(host.page)
   await openApp(host.page)
+  // Each of these is refused by parseCreateRoomParams, before the quota slot
+  // or the room is created, so no test here can reach a paid integration.
+  for (const params of [{}, { sample: true, url: 'https://example.com' }, { url: 'ftp://example.com/a' }, { url: 'not a url' }]) {
+    const created = await act(host.page, 'createRoom', params)
+    console.log('[refuse] createRoom', JSON.stringify(params), '->', JSON.stringify(created))
+    expect(created.success, JSON.stringify(params)).toBe(false)
+  }
+})
 
-  const created = await act<{ roomId: string; status: string; errorMessage: string }>(host.page, 'createRoom', {
-    fixture: 'broken',
-  })
-  console.log('[failed room] createRoom ->', JSON.stringify(created))
-  expect(created.success).toBe(true)
-  if (!created.success) return
-  expect(created.data.status).toBe('failed')
-
-  const [room] = await tap.probe({ collection: 'rooms', where: { roomId: created.data.roomId } })
-  console.log('[failed room] stored room ->', JSON.stringify(room?.data))
-  expect(room.data.status).toBe('failed')
-  expect(String(room.data.errorMessage)).toContain("Couldn't make enough questions")
-
-  // A failed room can't be started.
-  const open = await act(host.page, 'openQuestion', { roomId: created.data.roomId })
-  expect(open.success).toBe(false)
+test('no client can read or write a job queue', async ({ users }) => {
+  const [user] = await users(1, { label: LABEL })
+  await openApp(user.page)
+  // The user's own JWT, taken from the Authorization header of a refused (free) action call.
+  const request = user.page.waitForRequest((r) => r.url().includes('/api/actions/createRoom'))
+  await act(user.page, 'createRoom', {})
+  const token = ((await request).headers()['authorization'] ?? '').replace(/^Bearer /, '')
+  expect(token).not.toBe('')
+  // Raw socket to a job queue, as a hand-modified client could open. The job
+  // type is made up, so even a successful enqueue could never spend credits.
+  const frames = await user.page.evaluate(async (token) => {
+    const ws = new WebSocket(`${location.origin.replace(/^http/, 'ws')}/ws/jobs/room%3Aprobe?token=${token}`)
+    const seen: string[] = []
+    ws.onmessage = (e) => seen.push(String(e.data))
+    const opened = await new Promise<boolean>((resolve) => {
+      ws.onopen = () => resolve(true)
+      ws.onclose = (e) => {
+        seen.push(`closed ${e.code} ${e.reason}`)
+        resolve(false)
+      }
+    })
+    if (opened) {
+      ws.send(JSON.stringify({ type: 'job.enqueue', payload: { requestId: 'probe', type: 'probe-not-a-real-job', payload: {} } }))
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      ws.close()
+    }
+    return { opened, seen }
+  }, token)
+  console.log('[jobs] socket ->', JSON.stringify(frames))
+  expect(frames.opened).toBe(true)
+  expect(frames.seen.some((f) => f.includes('"canWrite":false'))).toBe(true)
+  expect(frames.seen.some((f) => f.includes('Write access denied'))).toBe(true)
+  expect(frames.seen.some((f) => f.includes('probe-not-a-real-job'))).toBe(false)
 })
 
 test('full round: host check, secrecy, one submission, one scoring, late rejection, refresh', async ({
@@ -67,7 +91,9 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   await Promise.all([openApp(host.page), openApp(p1.page), openApp(p2.page)])
 
   // --- Setup: create, join ---
-  const created = await act<{ roomId: string; code: string; status: string }>(host.page, 'createRoom')
+  const created = await act<{ roomId: string; code: string; status: string }>(host.page, 'createRoom', {
+    sample: true,
+  })
   expect(created.success).toBe(true)
   if (!created.success) return
   const { roomId, code } = created.data
@@ -111,7 +137,7 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   // answerKeys/sources rows (createdBy = host), so this proves read:false
   // beats ownership.
   for (const [who, tap] of [['host', hostTap], ['p1', p1Tap], ['p2', p2Tap]] as const) {
-    for (const collection of ['answerKeys', 'sources', 'reveal_locks']) {
+    for (const collection of ['answerKeys', 'sources', 'reveal_locks', 'room_quota']) {
       const rows = await tap.probe({ collection })
       console.log(`[2] ${who} probes ${collection} -> ${rows.length} rows`)
       expect(rows, `${who} reads no ${collection} rows`).toHaveLength(0)

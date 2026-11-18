@@ -4,12 +4,21 @@
  * Never read a user id from `params`.
  */
 
-import { RECORD_NOT_FOUND } from 'deepspace/worker'
+import { enqueueJob, RECORD_NOT_FOUND } from 'deepspace/worker'
 import type { ActionHandler, ActionTools, GetActionData, QueryActionData } from 'deepspace/worker'
 import type { Env } from '../../worker'
-import { BROKEN_FIXTURE_CANDIDATES, FIXTURE_CANDIDATES, FIXTURE_SOURCE } from '../lib/questions/fixtures'
-import { prepareQuestions } from '../lib/questions/prepare'
+import { parseCreateRoomParams } from '../lib/create-room-params'
+import { SAMPLE_PIPELINE_DEPS } from '../lib/questions/fixtures'
+import { runQuestionPipeline, USER_MESSAGES } from '../lib/questions/pipeline'
 import { QUESTION_DURATION_MS, scoreFor } from '../lib/scoring'
+import {
+  failRoom,
+  finishGeneration,
+  GENERATE_JOB_TYPE,
+  jobQueueId,
+  questionRecordId,
+  type GenerateJobPayload,
+} from '../server/generation'
 
 // No 0/O or 1/I, so codes are easy to read aloud. 32 characters, so
 // `byte % 32` is unbiased (256 is a multiple of 32).
@@ -47,20 +56,35 @@ function addMember(tools: ActionTools, roomId: string, userId: string) {
 }
 
 /**
- * Mark a room 'failed' so it never sits in 'generating'. Uses the same
- * `tools.update` call as createRoom's pipeline failure path. If this write
- * fails too, the room stays in 'generating' and only the log records it.
+ * Rooms made from a link, per user per UTC day. Each one spends owner
+ * credits; "Try it yourself" rooms don't count.
  */
-async function failRoom(tools: ActionTools, roomId: string, errorMessage: string): Promise<void> {
-  const failed = await tools.update('rooms', roomId, { status: 'failed', errorMessage })
-  if (!failed.success) {
-    console.error(`[createRoom] room ${roomId}: could not mark failed: ${failed.error}`)
-  }
-}
+export const ROOM_DAILY_LIMIT = 10
 
-/** Id of question number `index` in a room. Shared by `questions` and `answerKeys`. */
-function questionRecordId(roomId: string, index: number): string {
-  return `${roomId}:${index}`
+/**
+ * Claim one of today's ROOM_DAILY_LIMIT slots for this user, or return false
+ * if none is free. Each slot is a room_quota row with an immutable, fresh
+ * `attemptId`, so a slot can only ever be created once, even by two
+ * concurrent calls.
+ *
+ * Any failed create counts as "taken", not just the immutable rejection.
+ * That fails closed: during an outage a user may see "limit reached" early,
+ * but nobody can ever get past the limit.
+ */
+async function claimRoomSlot(tools: ActionTools, userId: string): Promise<boolean> {
+  const day = new Date().toISOString().slice(0, 10) // UTC date, e.g. 2026-11-18
+  for (let slot = 0; slot < ROOM_DAILY_LIMIT; slot++) {
+    const claimed = await tools.create(
+      'room_quota',
+      { userId, day, slot, attemptId: crypto.randomUUID() },
+      `${userId}:${day}:${slot}`,
+    )
+    if (claimed.success) return true
+    if (!isImmutableRejection(claimed.error)) {
+      console.error(`[createRoom] quota slot ${slot} for ${userId}: ${claimed.error}`)
+    }
+  }
+  return false
 }
 
 /** The SDK's error when a write would change an `immutable` column. */
@@ -122,80 +146,41 @@ async function queryAll<T extends Record<string, unknown>>(
   return (result.data as QueryActionData<T>).records
 }
 
-/**
- * Run the question pipeline for a new room and store the results.
- * Returns null on success, or an error message that is safe to show players.
- *
- * For now the questions are hardcoded fixtures. The real pipeline will
- * scrape `sourceUrl` and call the model here instead.
- */
-async function generateQuestions(
-  tools: ActionTools,
-  roomId: string,
-  candidates: unknown[],
-): Promise<string | null> {
-  const prepared = prepareQuestions(FIXTURE_SOURCE, candidates)
-  for (const r of prepared.rejected) {
-    console.warn(`[createRoom] room ${roomId}: rejected question ${r.index}: ${r.reasons.join('; ')}`)
-  }
-  if (!prepared.ok) {
-    console.error(`[createRoom] room ${roomId}: ${prepared.error}`)
-    return "Couldn't make enough questions from this article."
-  }
-
-  const source = await tools.create(
-    'sources',
-    { roomId, title: FIXTURE_SOURCE.title, fullText: FIXTURE_SOURCE.text },
-    roomId,
-  )
-  if (!source.success) throw new Error(`sources create failed: ${source.error}`)
-
-  for (const [index, q] of prepared.questions.entries()) {
-    const key = await tools.create(
-      'answerKeys',
-      {
-        roomId,
-        index,
-        prompt: q.prompt,
-        choices: q.choices,
-        correctIndex: q.correctIndex,
-        passage: q.passage,
-        explanation: q.explanation,
-      },
-      questionRecordId(roomId, index),
-    )
-    if (!key.success) throw new Error(`answerKeys create failed for #${index}: ${key.error}`)
-  }
-  return null
-}
-
 export const actions: Record<string, ActionHandler<Env>> = {
   /**
-   * Create a room with a fresh 6-character code, generate its questions, and
-   * move it to 'lobby'. The caller is the host: a room member and also a
-   * player (they get a players row, like anyone who joins).
+   * Create a room with a fresh 6-character code. The caller is the host: a
+   * room member and also a player (they get a players row, like anyone who
+   * joins). Params, exactly one of:
+   *
+   *   { url }          Validate the link, claim a room_quota slot (10 per user
+   *                    per UTC day; none free → error, no room), create the
+   *                    room as 'generating', then queue the 'generate-questions'
+   *                    job (src/jobs.ts) and return at once with
+   *                    status 'generating'. The job moves the room to 'lobby'
+   *                    or 'failed'. A slot stays used even if generation fails.
+   *   { sample: true } "Try it yourself": runs the same pipeline right here with
+   *                    the Tide Clock fixture (SAMPLE_PIPELINE_DEPS), no API
+   *                    calls, no quota, and returns 'lobby'.
    *
    * If the host's team_members or players write fails, the room is marked
    * 'failed' and the call returns an error (the host may not be able to read
-   * the room, so there's no room page to send them to).
-   *
-   * Status goes 'generating' → 'lobby', or 'generating' → 'failed' (with
-   * `errorMessage`) if the pipeline can't produce enough questions or throws.
-   * A failed room still returns success with `status: 'failed'`, so the host
-   * lands on the room page and sees why.
-   *
-   * `params.fixture === 'broken'` uses a question set that always fails
-   * validation. It exists only so tests can force the 'failed' path; it can
-   * only fail the caller's own new room.
-   * TODO(Friday): remove `fixture: 'broken'` when the real pipeline lands.
-   * It is live in production too: DeepSpace documents no way for the worker
-   * to tell local dev from production. (`ALLOW_DEBUG_ROUTES` is set by
-   * `deepspace dev`/`test run`, but a deployment can opt into it, so it
-   * isn't a dev signal.)
-   * TODO: take a sourceUrl and run Firecrawl + Anthropic instead of fixtures.
+   * the room, so there's no room page to send them to). Any later failure
+   * marks the room 'failed' with a user-safe `errorMessage` and still returns
+   * success, so the host lands on the room page and sees why.
    */
-  createRoom: async ({ userId, params, tools }) => {
-    const candidates = params.fixture === 'broken' ? BROKEN_FIXTURE_CANDIDATES : FIXTURE_CANDIDATES
+  createRoom: async ({ userId, params, tools, env }) => {
+    // 1. Check the input before spending anything.
+    const request = parseCreateRoomParams(params)
+    if (!request.ok) return { success: false, error: request.error }
+
+    // 2. A link costs owner credits: claim one of today's slots first.
+    if (request.kind === 'url' && !(await claimRoomSlot(tools, userId))) {
+      return {
+        success: false,
+        error: `You've reached today's limit of ${ROOM_DAILY_LIMIT} rooms from links. Try again tomorrow, or use Try it yourself.`,
+      }
+    }
+
     const roomId = crypto.randomUUID()
 
     // Codes are unique via `uniqueOn: ['code']`. On a collision the create is
@@ -245,26 +230,30 @@ export const actions: Record<string, ActionHandler<Env>> = {
       return { success: false, error: 'Could not create a room. Please try again.' }
     }
 
-    // Any failure past this point marks the room 'failed' instead of leaving
-    // it stuck in 'generating'.
-    let failure: string | null
+    // 3a. "Try it yourself": the real pipeline with fake scrape/generate, inline.
+    if (request.kind === 'sample') {
+      const result = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS)
+      const finished = await finishGeneration(tools, roomId, result)
+      if (!finished) return { success: false, error: 'Could not create a room. Please try again.' }
+      return { success: true, data: { roomId, code, ...finished } }
+    }
+
+    // 3b. A link: hand the slow, paid part to a background job on this room's own queue.
+    const payload: GenerateJobPayload = { roomId, hostId: userId, url: request.url }
     try {
-      failure = await generateQuestions(tools, roomId, candidates)
+      await enqueueJob(env.JOB_ROOMS, jobQueueId(roomId), GENERATE_JOB_TYPE, payload, {
+        maxAttempts: 1,
+        enqueuedBy: userId,
+      })
     } catch (err) {
-      console.error(`[createRoom] room ${roomId}: pipeline error: ${err instanceof Error ? err.message : String(err)}`)
-      failure = 'Something went wrong while making questions. Please try again.'
+      console.error(`[createRoom] room ${roomId}: enqueue failed: ${err instanceof Error ? err.message : String(err)}`)
+      await failRoom(tools, roomId, USER_MESSAGES.serviceUnavailable)
+      return {
+        success: true,
+        data: { roomId, code, status: 'failed', errorMessage: USER_MESSAGES.serviceUnavailable },
+      }
     }
-
-    const next: Record<string, unknown> & { status: string } = failure
-      ? { status: 'failed', errorMessage: failure }
-      : { status: 'lobby', sourceTitle: FIXTURE_SOURCE.title }
-    const updated = await tools.update('rooms', roomId, next)
-    if (!updated.success) {
-      console.error(`[createRoom] room ${roomId}: status update to '${next.status}' failed: ${updated.error}`)
-      return { success: false, error: 'Could not create a room. Please try again.' }
-    }
-
-    return { success: true, data: { roomId, code, status: next.status, errorMessage: failure ?? undefined } }
+    return { success: true, data: { roomId, code, status: 'generating' } }
   },
 
   /**
