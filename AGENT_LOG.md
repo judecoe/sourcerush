@@ -478,3 +478,15 @@ Not verified / risks:
 - No browser run of an actual sign-in (email or OAuth) followed by pressing Try-it on /home. game-ui/lobby specs cover the button on /create only.
 - Signing out while on /home now redirects to `/` (AuthGate's `redirectOnSignOut` default). Before, /home just showed signed-out content.
 - Phone layout was checked by reading the classes only. Nothing was viewed at phone width.
+
+## 2026-11-18 — Landing/home copy tweaks
+
+Did:
+- `src/pages/index.tsx`: the sample link's text is now "Play a sample game →" (still → /home). The line under it is unchanged: "A short sample article. Play it on your own." (That's the existing wording, not the "Sample article, play alone." you quoted; I kept what was there.) Header comment updated.
+- `src/pages/(app)/home.tsx`: the line above the button is now "Start a sample game: you host and play; share the code to add friends." It replaces "No article handy? Play a short sample one." so there's one line, not two. Button label unchanged ("Try it yourself"). Header comment updated.
+- `tests/landing.spec.ts`: the link locator and the 4th test's title use the new text. No other spec touched.
+- `CLAUDE.md`: the sign-in gotcha line names the new link text.
+
+Verified: tsc clean, eslint clean, vitest 58/58. `npx deepspace test run all`: 23 passed (4/4 landing). `membership-resubscribe` ✘ is its expected `test.fail()`.
+
+Not verified / risks: the "→" is in the link's accessible name, so screen readers read it out ("right arrow"). Nothing was viewed in a browser.

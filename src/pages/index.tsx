@@ -6,7 +6,7 @@
  * Keep it that way: no auth, record or mutation hooks here, and no action
  * calls. Every action on this page is a plain link.
  *
- * "Try it yourself" links to /home, not /create: Google/GitHub sign-in always
+ * "Play a sample game →" links to /home, not /create: Google/GitHub sign-in always
  * lands on /home, so linking there means email and OAuth sign-in end up on
  * the same page, where the visitor presses the Try-it button. Loading a page
  * never creates a room.
@@ -52,7 +52,7 @@ export default function Landing() {
 
         <div className="mt-8 border-t border-border pt-6">
           <Link to="/home" className={buttonVariants({ variant: 'outline', className: 'w-full' })}>
-            Try it yourself
+            Play a sample game →
           </Link>
           <p className="mt-2 text-sm text-muted-foreground">A short sample article. Play it on your own.</p>
         </div>

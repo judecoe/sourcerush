@@ -3,7 +3,7 @@
  *
  * Every sign-in lands here: Google/GitHub sign-in always redirects to /home
  * (src/server/http-routes.ts, oauth-complete), and the landing page's
- * "Try it yourself" links here so email sign-in ends up on the same page.
+ * "Play a sample game →" links here so email sign-in ends up on the same page.
  *
  * The page is public (it sits under (app)/, not (protected)/), so it gates
  * itself with the same AuthGate + SignedOutPanel the protected pages use.
@@ -36,7 +36,9 @@ export default function HomePage() {
             </Link>
           </div>
           <div className="mt-8 border-t border-border pt-6">
-            <p className="mb-3 text-sm text-muted-foreground">No article handy? Play a short sample one.</p>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Start a sample game: you host and play; share the code to add friends.
+            </p>
             <TryItYourselfButton />
           </div>
         </div>
