@@ -1,10 +1,11 @@
 /**
- * The pure middle of the question pipeline: build the prompt (to get the
- * exact `sourceUsed`), validate candidates against it, shuffle each
- * question's choices. No SDK or integration calls, so it is unit tested.
+ * The pure middle of the question pipeline: trim the source to the exact
+ * `sourceUsed` the model saw, validate candidates against it, shuffle each
+ * question's choices (choices only: the questions keep the model's order).
+ * No SDK or integration calls, so it is unit tested.
  */
 
-import { buildQuestionPrompt, QUESTIONS_MIN_USABLE, type PromptInput } from './prompt'
+import { QUESTIONS_MIN_USABLE, trimSource, type PromptInput } from './prompt'
 import { shuffleChoices, validateQuestions, type Question, type Rejection } from './validate'
 
 export type PrepareResult =
@@ -16,7 +17,7 @@ export function prepareQuestions(
   candidates: unknown[],
   random: () => number = Math.random,
 ): PrepareResult {
-  const { sourceUsed } = buildQuestionPrompt(source)
+  const sourceUsed = trimSource(source.text)
   const { valid, rejected } = validateQuestions(candidates, sourceUsed)
   if (valid.length < QUESTIONS_MIN_USABLE) {
     return {

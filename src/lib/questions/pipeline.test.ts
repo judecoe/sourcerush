@@ -13,7 +13,7 @@ import {
   type ScrapeResult,
   type UserMessage,
 } from './pipeline'
-import { MAX_SOURCE_CHARS, QUESTIONS_MIN_USABLE } from './prompt'
+import { MAX_SOURCE_CHARS, QUESTIONS_MIN_USABLE, systemPrompt } from './prompt'
 import { readGenerateResponse, readScrapeResponse, readSearchResponse } from './responses'
 
 const URL = 'https://example.com/article'
@@ -65,7 +65,7 @@ describe('topicRoomResult', () => {
 describe('runQuestionPipeline', () => {
   it('succeeds on the first try', async () => {
     const { deps, generate } = fakes([{ ok: true, text: GOOD, stopReason: 'end_turn' }])
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.questions).toHaveLength(8)
@@ -78,7 +78,7 @@ describe('runQuestionPipeline', () => {
       { ok: true, text: BROKEN },
       { ok: true, text: GOOD },
     ])
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result.ok).toBe(true)
     expect(generate).toHaveBeenCalledTimes(2)
     expect(result.log.some((l) => l.includes('passage not found in source'))).toBe(true)
@@ -89,7 +89,7 @@ describe('runQuestionPipeline', () => {
       { ok: true, text: BROKEN },
       { ok: true, text: BROKEN },
     ])
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result).toMatchObject({ ok: false, userMessage: USER_MESSAGES.notEnoughQuestions })
     expect(generate).toHaveBeenCalledTimes(GENERATE_ATTEMPTS)
   })
@@ -99,7 +99,7 @@ describe('runQuestionPipeline', () => {
       { ok: true, text: GOOD.slice(0, 200), stopReason: 'max_tokens' },
       { ok: true, text: GOOD },
     ])
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result.ok).toBe(true)
     expect(generate).toHaveBeenCalledTimes(2)
     expect(result.log.some((l) => l.includes('not valid JSON') && l.includes('max_tokens'))).toBe(true)
@@ -113,7 +113,7 @@ describe('runQuestionPipeline', () => {
       '[Hallow Cross](/wiki/Hallow_Cross_(town) "Hallow Cross (town)")',
     )
     const { deps } = fakes([{ ok: true, text: GOOD }], { ok: true, title: 'T', markdown })
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.questions).toHaveLength(8)
@@ -124,20 +124,20 @@ describe('runQuestionPipeline', () => {
     const markdown = '![chart](https://example.com/a.png)\n'.repeat(200) + 'A short paragraph.'
     expect(markdown.length).toBeGreaterThan(MIN_ARTICLE_CHARS)
     const { deps, generate } = fakes([], { ok: true, title: 'T', markdown })
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result).toMatchObject({ ok: false, userMessage: USER_MESSAGES.tooLittleText })
     expect(generate).not.toHaveBeenCalled()
   })
 
   it('fails with pageUnreachable when the page returned an HTTP error', async () => {
     const { deps, generate } = fakes([], { ok: true, title: '', markdown: FIXTURE_SOURCE.text, statusCode: 404 })
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result).toMatchObject({ ok: false, userMessage: USER_MESSAGES.pageUnreachable })
     expect(generate).not.toHaveBeenCalled()
   })
 
   it('fails with serviceUnavailable when the scrape fails or throws', async () => {
-    const failed = await runQuestionPipeline(URL, fakes([], { ok: false, log: 'insufficient_credits' }).deps)
+    const failed = await runQuestionPipeline(URL, fakes([], { ok: false, log: 'insufficient_credits' }).deps, 'link')
     expect(failed).toMatchObject({ ok: false, userMessage: USER_MESSAGES.serviceUnavailable })
 
     const threw = await runQuestionPipeline(URL, {
@@ -145,14 +145,14 @@ describe('runQuestionPipeline', () => {
         throw new Error('scrape timed out after 30000 ms')
       },
       generate: vi.fn(),
-    })
+    }, 'link')
     expect(threw).toMatchObject({ ok: false, userMessage: USER_MESSAGES.serviceUnavailable })
     expect(threw.log.join('\n')).toContain('timed out')
   })
 
   it('does not regenerate when the generate call itself fails', async () => {
     const { deps, generate } = fakes([{ ok: false, log: 'insufficient_credits (HTTP 402): Insufficient credits.' }])
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result).toMatchObject({ ok: false, userMessage: USER_MESSAGES.serviceUnavailable })
     expect(generate).toHaveBeenCalledTimes(1)
   })
@@ -160,7 +160,7 @@ describe('runQuestionPipeline', () => {
   it('fails with serviceUnavailable when an integration error throws from res.json()', async () => {
     // What callIntegration does when the api-worker answers with a non-JSON body.
     const generate = vi.fn<PipelineDeps['generate']>(async () => JSON.parse('<html>502 Bad Gateway</html>'))
-    const result = await runQuestionPipeline(URL, { ...fakes([]).deps, generate })
+    const result = await runQuestionPipeline(URL, { ...fakes([]).deps, generate }, 'link')
     expect(result).toMatchObject({ ok: false, userMessage: USER_MESSAGES.serviceUnavailable })
     expect(result.log.join('\n')).toMatch(/generate attempt 1 threw/)
     expect(generate).toHaveBeenCalledTimes(1)
@@ -175,7 +175,7 @@ describe('runQuestionPipeline', () => {
       fakes([{ ok: true, text: raw }, { ok: true, text: raw }]).deps,
     ]
     for (const deps of cases) {
-      const result = await runQuestionPipeline(URL, deps)
+      const result = await runQuestionPipeline(URL, deps, 'link')
       expect(result.ok).toBe(false)
       if (result.ok) continue
       expect(ALL_MESSAGES).toContain(result.userMessage)
@@ -183,8 +183,24 @@ describe('runQuestionPipeline', () => {
     }
   })
 
+  it('sends the prompt for the given kind', async () => {
+    for (const kind of ['link', 'topic'] as const) {
+      const { deps, generate } = fakes([{ ok: true, text: GOOD }])
+      await runQuestionPipeline(URL, deps, kind)
+      expect(generate.mock.calls[0][0]).toBe(systemPrompt(kind))
+    }
+  })
+
+  it("keeps the model's question order (only the choices are shuffled)", async () => {
+    const { deps } = fakes([{ ok: true, text: GOOD }])
+    const result = await runQuestionPipeline(URL, deps, 'link')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.questions.map((q) => q.prompt)).toEqual((FIXTURE_CANDIDATES as { prompt: string }[]).map((q) => q.prompt))
+  })
+
   it('the "Try it yourself" fakes produce a full question set', async () => {
-    const result = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS)
+    const result = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS, 'link')
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.questions.length).toBeGreaterThanOrEqual(QUESTIONS_MIN_USABLE)
@@ -197,7 +213,7 @@ describe('runQuestionPipeline', () => {
     const long = FIXTURE_SOURCE.text + '\n\n' + 'More harbour history follows here. '.repeat(1500)
     expect(long.length).toBeGreaterThan(MAX_SOURCE_CHARS)
     const { deps } = fakes([{ ok: true, text: GOOD }], { ok: true, title: 'T', markdown: long })
-    const result = await runQuestionPipeline(URL, deps)
+    const result = await runQuestionPipeline(URL, deps, 'link')
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.sourceUsed).toHaveLength(MAX_SOURCE_CHARS)
@@ -299,14 +315,14 @@ describe('integration response readers', () => {
     const badScrape = await runQuestionPipeline(URL, {
       scrape: async () => readScrapeResponse({ data: {} }).result,
       generate: vi.fn(),
-    })
+    }, 'link')
     expect(badScrape).toMatchObject({ ok: false, userMessage: USER_MESSAGES.serviceUnavailable })
     expect(badScrape.log.join('\n')).toContain('data.data.markdown')
 
     const badGenerate = await runQuestionPipeline(URL, {
       ...fakes([]).deps,
       generate: async () => readGenerateResponse({ content: 'not an array' }).result,
-    })
+    }, 'link')
     expect(badGenerate).toMatchObject({ ok: false, userMessage: USER_MESSAGES.serviceUnavailable })
     expect(badGenerate.log.join('\n')).toContain('data.content')
   })

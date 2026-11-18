@@ -9,6 +9,7 @@
  *   result fails the room with USER_MESSAGES.noArticleFound. Then runs the
  *   question pipeline on the link against the real Firecrawl + Anthropic
  *   integrations, and sets the room to 'lobby' (with sourceUrl) or 'failed'.
+ *   A topic room gets the topic prompt (kind 'topic'), a link room 'link'.
  *   For a topic room, a too-short or unreachable article fails with
  *   USER_MESSAGES.topicArticleUnusable instead (topicRoomResult).
  *   The topic is never logged.
@@ -84,10 +85,15 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
     if (url === undefined) throw new Error('job payload has neither url nor topic')
 
     let attempt = 0
-    const pipelineResult = await runQuestionPipeline(url, {
-      scrape: (u) => scrapeArticle(tools, roomId, u),
-      generate: (system, user) => generateText(tools, roomId, ++attempt, system, user),
-    })
+    const kind = payload.topic !== undefined ? 'topic' : 'link'
+    const pipelineResult = await runQuestionPipeline(
+      url,
+      {
+        scrape: (u) => scrapeArticle(tools, roomId, u),
+        generate: (system, user) => generateText(tools, roomId, ++attempt, system, user),
+      },
+      kind,
+    )
     // A topic room's host never chose the page, so "that page" messages are reworded.
     const result = payload.topic !== undefined ? topicRoomResult(pipelineResult) : pipelineResult
 

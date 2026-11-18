@@ -3,12 +3,12 @@ import { BROKEN_FIXTURE_CANDIDATES, FIXTURE_CANDIDATES, FIXTURE_SOURCE } from '.
 import { markdownToPlainText } from './markdown'
 import { MIN_ARTICLE_CHARS } from './pipeline'
 import { prepareQuestions } from './prepare'
-import { buildQuestionPrompt } from './prompt'
+import { trimSource } from './prompt'
 import { validateQuestions, type Question } from './validate'
 
 describe('fixtures', () => {
   it('all 8 candidates validate against sourceUsed', () => {
-    const { sourceUsed } = buildQuestionPrompt(FIXTURE_SOURCE)
+    const sourceUsed = trimSource(FIXTURE_SOURCE.text)
     const { valid, rejected } = validateQuestions(FIXTURE_CANDIDATES, sourceUsed)
     expect(rejected).toEqual([])
     expect(valid).toHaveLength(8)

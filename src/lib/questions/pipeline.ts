@@ -17,7 +17,7 @@
 
 import { markdownToPlainText } from './markdown'
 import { prepareQuestions } from './prepare'
-import { buildQuestionPrompt } from './prompt'
+import { buildQuestionPrompt, type SourceKind } from './prompt'
 import { parseModelOutput, type Question } from './validate'
 
 /** Minimum article length, in characters of plain text after cleanup. */
@@ -74,7 +74,15 @@ function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-export async function runQuestionPipeline(url: string, deps: PipelineDeps): Promise<PipelineResult> {
+/**
+ * `kind` picks the prompt: 'link' when the host chose the article, 'topic'
+ * when a search found it (see buildQuestionPrompt). Nothing else depends on it.
+ */
+export async function runQuestionPipeline(
+  url: string,
+  deps: PipelineDeps,
+  kind: SourceKind,
+): Promise<PipelineResult> {
   const log: string[] = []
   function fail(userMessage: UserMessage, line: string): PipelineResult {
     log.push(line)
@@ -102,7 +110,7 @@ export async function runQuestionPipeline(url: string, deps: PipelineDeps): Prom
     )
   }
   const source = { title: scraped.title.trim() || url, text }
-  const { system, user, sourceUsed } = buildQuestionPrompt(source)
+  const { system, user, sourceUsed } = buildQuestionPrompt(source, kind)
 
   // 3. Generate; regenerate once if too few questions pass or the output
   //    doesn't parse. A failed call is not retried (it may be out of credits).

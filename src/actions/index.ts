@@ -235,7 +235,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
 
     // 3a. "Try it yourself": the real pipeline with fake scrape/generate, inline.
     if (request.kind === 'sample') {
-      const result = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS)
+      const result = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS, 'link')
       const finished = await finishGeneration(tools, roomId, result)
       if (!finished) return { success: false, error: 'Could not create a room. Please try again.' }
       return { success: true, data: { roomId, code, ...finished } }
