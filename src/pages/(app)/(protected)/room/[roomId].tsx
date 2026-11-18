@@ -1,31 +1,31 @@
 /**
- * /room/:roomId: the room lobby, with a live player list.
+ * /room/:roomId: the whole game, for host and players alike.
  *
- * Everything shown here comes from synced records, so a refresh rebuilds the
- * page. The server only sends rooms/players rows to members of this room. A
- * non-member's queries come back empty, and the page says so.
+ * Everything shown comes from live records (rooms, players, the current
+ * question, and the caller's own submission), so a refresh rebuilds any
+ * state. The server only sends these rows to members of this room; a
+ * non-member gets nothing back and sees the "not in this room" card.
+ *
+ * All writes go through server actions (callAction). The host sees the same
+ * view as everyone else, plus Start/Next and "answered X of N".
  */
 
+import type { ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { useAuth, useQuery } from 'deepspace'
-
-type Room = {
-  roomId: string
-  code: string
-  hostId: string
-  status: string
-}
-
-type Player = {
-  roomId: string
-  userId: string
-  displayName: string
-  score: number
-}
+import { useAuth, useMutations, useQuery } from 'deepspace'
+import { useAutoReveal, useMsLeft } from '@/components/game/hooks'
+import { Leaderboard } from '@/components/game/Leaderboard'
+import { Lobby } from '@/components/game/Lobby'
+import { QuestionView } from '@/components/game/QuestionView'
+import { RevealView } from '@/components/game/RevealView'
+import type { Player, Question, Room, Submission } from '@/components/game/types'
 
 export default function RoomPage() {
   const { roomId = '' } = useParams()
   const { userId } = useAuth()
+  // We never write records from the client; `ready` means the record room
+  // has enrolled this user, so buttons stay disabled until then.
+  const { ready } = useMutations('rooms')
 
   const rooms = useQuery<Room>('rooms', { where: { roomId }, limit: 1 })
   const players = useQuery<Player>('players', {
@@ -33,55 +33,95 @@ export default function RoomPage() {
     orderBy: 'createdAt',
     orderDir: 'asc',
   })
-
   const room = rooms.records[0]?.data
-  const loading = rooms.status === 'loading' || players.status === 'loading'
+
+  // The current question (its id is `${roomId}:${index}`, same as the server).
+  const index = room?.currentIndex ?? -1
+  const questionId = index >= 0 ? `${roomId}:${index}` : null
+  const questions = useQuery<Question>('questions', { where: { roomId, index }, limit: 1 })
+  const question = questions.records[0]?.data
+  // Only our own row ever comes back (submissions are owner-read only).
+  const submissions = useQuery<Submission>('submissions', { where: { questionId: questionId ?? '' }, limit: 1 })
+  const mySubmission = submissions.records[0]?.data
+
+  const msLeft = useMsLeft(room?.status === 'question' ? room.endsAt : undefined)
+  const secondsLeft = Math.ceil(msLeft / 1000)
+  const playerCount = players.records.length
+  const everyoneAnswered = playerCount > 0 && (room?.answeredCount ?? 0) >= playerCount
+  // useMsLeft returns 0 when it has no endsAt, so only a question with a
+  // known endsAt counts as "time's up".
+  const timeUp = room?.status === 'question' && room.endsAt !== undefined && msLeft === 0
+  useAutoReveal(roomId, room?.status, questionId, timeUp || everyoneAnswered)
+
   const isHost = !!room && !!userId && room.hostId === userId
+
+  let body: ReactNode
+  if (rooms.status === 'loading' || players.status === 'loading') {
+    body = <p className="text-muted-foreground">Loading room…</p>
+  } else if (!room) {
+    body = (
+      <div data-testid="not-member" className="rounded-lg border border-border bg-card p-6">
+        <p className="font-semibold">You're not in this room.</p>
+        <Link to="/join" className="mt-2 inline-block text-sm underline underline-offset-4">
+          Join with a code
+        </Link>
+      </div>
+    )
+  } else if (room.status === 'generating') {
+    body = <p data-testid="generating">Generating questions…</p>
+  } else if (room.status === 'failed') {
+    body = (
+      <div data-testid="failed" className="rounded-lg border border-destructive p-6">
+        <p className="font-semibold">This room couldn't be set up.</p>
+        <p className="mt-2 text-sm">{room.errorMessage || 'Something went wrong.'}</p>
+        <Link to="/create" className="mt-4 inline-block text-sm underline underline-offset-4">
+          Try another room
+        </Link>
+      </div>
+    )
+  } else if (room.status === 'lobby') {
+    body = <Lobby room={room} players={players.records} userId={userId} isHost={isHost} ready={ready} />
+  } else if (room.status === 'finished') {
+    body = (
+      <div data-testid="finished" className="space-y-6">
+        <h1 className="text-2xl font-bold">Game over</h1>
+        <Leaderboard players={players.records} userId={userId} />
+      </div>
+    )
+  } else if (!question || !questionId) {
+    // 'question' or 'reveal', but the question row hasn't synced yet.
+    body = <p className="text-muted-foreground">Loading question…</p>
+  } else if (room.status === 'question') {
+    body = (
+      <QuestionView
+        key={questionId}
+        room={room}
+        questionId={questionId}
+        question={question}
+        mySubmission={mySubmission}
+        playerCount={playerCount}
+        secondsLeft={secondsLeft}
+        isHost={isHost}
+        ready={ready}
+      />
+    )
+  } else {
+    body = (
+      <RevealView
+        room={room}
+        question={question}
+        mySubmission={mySubmission}
+        players={players.records}
+        userId={userId}
+        isHost={isHost}
+        ready={ready}
+      />
+    )
+  }
 
   return (
     <div className="min-h-full text-foreground">
-      <div className="mx-auto max-w-md px-6 py-20">
-        {loading ? (
-          <p className="text-muted-foreground">Loading room…</p>
-        ) : room ? (
-          <header className="mb-8">
-            <p className="text-sm text-muted-foreground">Room code</p>
-            <p data-testid="room-code" className="font-mono text-4xl font-bold tracking-widest">
-              {room.code}
-            </p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {isHost ? 'You are hosting. ' : ''}Status: {room.status}
-            </p>
-          </header>
-        ) : (
-          <div data-testid="not-member" className="mb-8 rounded-lg border border-border bg-card p-6">
-            <p className="font-semibold">You're not in this room.</p>
-            <Link to="/join" className="mt-2 inline-block text-sm underline underline-offset-4">
-              Join with a code
-            </Link>
-          </div>
-        )}
-
-        {/* Rendered from whatever player rows arrive, even for a non-member,
-            so a permissions leak would be visible here rather than hidden. */}
-        <section>
-          <h2 className="mb-3 text-lg font-semibold">
-            Players <span data-testid="player-count">{players.records.length}</span>
-          </h2>
-          {players.records.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No players yet.</p>
-          ) : (
-            <ul data-testid="player-list" className="divide-y divide-border rounded-lg border border-border">
-              {players.records.map((p) => (
-                <li key={p.recordId} className="px-4 py-3">
-                  {p.data.displayName}
-                  {userId && p.data.userId === userId ? ' (you)' : ''}
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
+      <div className="mx-auto max-w-md px-4 py-8 sm:py-16">{body}</div>
     </div>
   )
 }

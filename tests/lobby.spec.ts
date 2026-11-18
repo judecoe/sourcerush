@@ -92,7 +92,8 @@ test('create, join, live list, refresh, rejoin, and read isolation', async ({ us
   await expect(outsider.page.getByRole('alert')).toHaveText('No room with that code.')
   await outsider.page.goto(`/room/${roomId}`)
   await expect(outsider.page.getByTestId('not-member')).toBeVisible({ timeout: 15_000 })
-  await expect(outsider.page.getByTestId('player-count')).toHaveText('0')
+  // Non-members get no player list at all. Leaks are checked on the wire below.
+  await expect(outsider.page.getByTestId('player-count')).toHaveCount(0)
 
   // Player joins by code (lower case, to check normalisation).
   await player.page.goto('/join')
@@ -120,7 +121,7 @@ test('create, join, live list, refresh, rejoin, and read isolation', async ({ us
 
   // (a) Outsider got nothing: not on screen, not on the wire.
   await outsider.page.waitForTimeout(2_000)
-  await expect(outsider.page.getByTestId('player-count')).toHaveText('0')
+  await expect(outsider.page.getByTestId('player-count')).toHaveCount(0)
   await expect(outsider.page.getByTestId('not-member')).toBeVisible()
   const marker = `${roomId}:` // prefix of every player / membership record id
   expect(hostTap.frames.some((f) => f.includes(marker)), 'control: host frames carry the player row').toBe(true)

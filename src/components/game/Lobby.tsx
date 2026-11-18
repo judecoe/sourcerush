@@ -1,0 +1,52 @@
+/**
+ * Lobby: the code to share and a live list of who has joined.
+ * The host also gets the Start button.
+ */
+
+import type { RecordData } from 'deepspace'
+import { OpenQuestionButton } from './OpenQuestionButton'
+import type { Player, Room } from './types'
+
+type Props = {
+  room: Room
+  players: RecordData<Player>[]
+  userId: string | null
+  isHost: boolean
+  ready: boolean
+}
+
+export function Lobby({ room, players, userId, isHost, ready }: Props) {
+  return (
+    <div className="space-y-8">
+      <header>
+        <p className="text-sm text-muted-foreground">Room code</p>
+        <p data-testid="room-code" className="font-mono text-4xl font-bold tracking-widest">
+          {room.code}
+        </p>
+        {room.sourceTitle && (
+          <p className="mt-2 text-sm text-muted-foreground">Article: {room.sourceTitle}</p>
+        )}
+      </header>
+
+      <section>
+        <h2 className="mb-3 text-lg font-semibold">
+          Players <span data-testid="player-count">{players.length}</span>
+        </h2>
+        <ul data-testid="player-list" className="divide-y divide-border rounded-lg border border-border">
+          {players.map((p) => (
+            <li key={p.recordId} className="px-4 py-3">
+              {p.data.displayName}
+              {p.data.userId === userId ? ' (you)' : ''}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {isHost ? (
+        <OpenQuestionButton roomId={room.roomId} ready={ready} label="Start" />
+      ) : (
+        <p className="text-sm text-muted-foreground">Waiting for the host to start…</p>
+      )}
+    </div>
+  )
+}

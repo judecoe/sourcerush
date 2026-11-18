@@ -126,6 +126,8 @@ Don't put SDK or integration calls inside these modules. Keep them pure so the t
 
 - Unit: `src/lib/questions/validate.test.ts`, `fixtures.test.ts`, `src/lib/scoring.test.ts` (Vitest). Run after any pipeline or scoring change.
 - Runtime: `tests/game.spec.ts` covers the checks below against local dev (host, who also plays, + 2 players), driving actions via `callAction` and reading via raw `core.subscribe` probes (`tests/helpers/game.ts`).
+- UI: `tests/game-ui.spec.ts` plays through the room page (create/join, answer, mid-question refresh, auto reveal, Next, a round closing on time with no answers).
+- Test accounts: 9 of 10 used (labels `sourcerush`, `sourcerush-game`, `sourcerush-ui`). New specs must reuse an existing label; don't create more accounts.
 - Integrity checks, run with two different signed-in users:
   1. Query `answerKeys` and `sources` from a player client: nothing returned.
   2. Submit twice: counted once.

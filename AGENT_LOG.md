@@ -178,3 +178,36 @@ Not verified / risks:
 - `failed` rooms now also have a host `players` row. That's harmless because `failed` is terminal.
 - The room page shows no UI difference yet: the host appears in the player list with "(you)" next to their name, and nothing more.
 - `collab.spec.ts:65` is still flaky under parallel load (1 of 3 runs here, and 1 of 3 in an earlier entry); not investigated.
+
+## 2026-11-17 — Game UI on the room page
+
+Did:
+- `src/pages/(app)/(protected)/room/[roomId].tsx`: rewritten. Reads `rooms`, `players`, the current `questions` row (`where { roomId, index: currentIndex }`) and the caller's own `submissions` row (`where { questionId }`; owner-read only), then picks a view by `room.status`. Non-members see only the "not in this room" card (no player list anymore). `generating`, `failed` (shows `errorMessage`) and `finished` (final leaderboard) are inline.
+- New `src/components/game/`:
+  - `types.ts`: client shapes of the records.
+  - `hooks.ts`: `useMsLeft(endsAt)` (display countdown, ticks every 250 ms) and `useAutoReveal(roomId, status, questionId, shouldReveal)`. The page passes `timeUp || answeredCount >= players.length`. The effect returns early unless `status === 'question'`; its cleanup sets `cancelled` and clears the pending retry timer, and it re-runs (so cleans up) whenever status or questionId changes, or on unmount. Any failed call is retried every 1 s, 5 calls max, never shown to the user; `alreadyRevealed` is a success.
+  - `Lobby.tsx` (code, article title, live players, host Start), `QuestionView.tsx` (prompt, countdown, 4 large buttons; "Answer locked in" when the own submission row exists or the submit just succeeded; host "Answered X of N"), `RevealView.tsx` (correct choice highlighted, passage in a prominent quote block, explanation, own result with points from `scoreFor(...)` for display, leaderboard, host Next), `Leaderboard.tsx` (sorted by `players.score`), `OpenQuestionButton.tsx` (Start/Next → `openQuestion`).
+  - Every button: disabled until `useMutations('rooms').ready` and while its call is in flight; choices also at 0 s. All writes via `callAction`; no direct client writes. Answer data comes only from `questions.reveal`.
+- `tests/game-ui.spec.ts` (new, label `sourcerush-ui`): create/join via the pages; Start; p1 answers wrong → locked in; host sees "Answered 1 of 3"; p1 reloads → same locked choice, no buttons; p2 + host answer right → auto reveal on all three shows the fixture passage, explanation, correct choice, 3-row leaderboard; result text per player; displayed points equal the player's leaderboard score; p1 last with 0; only host has Start/Next. Next → question 2; nobody answers; all three show the reveal ("No answer") once time runs out.
+- Test accounts: created `sourcerush-ui-host@`, `-p1@`, `-p2@deepspace.test` (label `sourcerush-ui`, passwords from `openssl rand` via `--password-stdin`, never printed). Pool is now 9/10.
+- Existing specs (approved deviations):
+  - `lobby.spec.ts` L95/L123, `membership-resubscribe.spec.ts` L42: outsider/watching tab now asserts `player-count` is not rendered (`toHaveCount(0)`) instead of "0". Leak detection in lobby.spec stays on the raw frames + probe.
+  - `game.spec.ts` step 4: waits for `answer-locked` and the prompt instead of `room-code` / "Status: question" / `player-count` (those are lobby-only now), then `openApp(p1.page)` so p1's room page doesn't auto-reveal and race the "exactly one scorer" and late-reveal assertions.
+- `CLAUDE.md` Testing: added the UI spec and the account-pool rule (reuse existing labels).
+
+Verified (local dev):
+- `npx tsc --noEmit`, `npx eslint .`: clean. `npx vitest run`: 22/22.
+- `npx deepspace test run tests/game-ui.spec.ts` alone: passed (24.6 s). Worker log: 3 `revealQuestion` calls per round (one per client), no retries.
+- `npx deepspace test run all`:
+  - First attempt: game.spec failed at L161 (waited for `room-code` mid-question; my miss in the step 4 edit). Fixed as above.
+  - Run 1 after fix: 18 passed, 0 failed (membership-resubscribe ✘ is its expected `test.fail()`).
+  - Run 2 after fix: 17 passed, 1 failed: `collab.spec.ts:65` ("Loading integration catalog..." not visible), the same scaffold flake as in earlier entries. membership-resubscribe again failed as expected at L54.
+- `git grep --untracked -n -i "password" -- src tests`: 6 hits, all `--password-stdin` instructions or comments; no secrets.
+
+Not verified / risks:
+- Phone layout checked only by reading the classes (`max-w-md px-4`, full-width wrapping buttons); I did not view it on a narrow viewport or a real phone.
+- The `finished` screen and the `generating`/`failed` views are not exercised by the UI spec (finished needs all 8 questions). The failed view is reachable via `fixture: 'broken'` but no test looks at it.
+- Clock skew retries untested: on the local machine client and server clocks agree. A client clock running >5 s ahead would give up early; the room then stays in `question` at 0 s until another client reveals or someone refreshes (the retries restart on mount).
+- membership-resubscribe: since non-members no longer see the player list, its L54 now fails because the room row (pre-existing) never arrives, not only the player rows. Same SDK bug, slightly different symptom.
+- The countdown uses the device clock; a skewed phone shows a wrong countdown (the server still enforces endsAt).
+- `answeredCount` is display-only; the "everyone answered" early reveal trigger uses it, but the server recounts submissions before allowing it.

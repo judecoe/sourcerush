@@ -39,7 +39,7 @@ test('a page subscribed before joining sees pre-existing room rows after join', 
   const watching = latecomer.page
   await watching.goto(`/room/${roomId}`)
   await expect(watching.getByTestId('not-member')).toBeVisible({ timeout: 15_000 })
-  await expect(watching.getByTestId('player-count')).toHaveText('0')
+  await expect(watching.getByTestId('player-count')).toHaveCount(0)
 
   // Latecomer joins from a second tab; the first tab stays subscribed.
   const joinTab = await latecomer.context.newPage()

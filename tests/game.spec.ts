@@ -157,12 +157,13 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   expect(await hostTap.probe({ collection: 'submissions', where: { questionId: q0 } })).toHaveLength(0)
 
   // --- 4. Refresh mid-question restores everything from records ---
+  // (The room code is shown only in the lobby; mid-question the page shows
+  // p1's locked-in answer.)
   await p1.page.goto(`/room/${roomId}`)
-  await expect(p1.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
+  await expect(p1.page.getByTestId('answer-locked')).toBeVisible({ timeout: 15_000 })
   await p1.page.reload()
-  await expect(p1.page.getByTestId('room-code')).toHaveText(code, { timeout: 15_000 })
-  await expect(p1.page.getByText('Status: question')).toBeVisible()
-  await expect(p1.page.getByTestId('player-count')).toHaveText('3')
+  await expect(p1.page.getByTestId('answer-locked')).toBeVisible({ timeout: 15_000 })
+  await expect(p1.page.getByTestId('question-prompt')).toHaveText(prompt)
   const [roomAfter] = await p1Tap.probe({ collection: 'rooms', where: { roomId } })
   const [questionAfter] = await p1Tap.probe({ collection: 'questions', where: { roomId } })
   const subsAfter = await p1Tap.probe({ collection: 'submissions', where: { questionId: q0 } })
@@ -170,6 +171,9 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   expect(roomAfter.data).toMatchObject({ status: 'question', currentIndex: 0, endsAt: opened.data.endsAt, answeredCount: 1 })
   expect(questionAfter.data).toMatchObject({ prompt, choices })
   expect(subsAfter.map((s) => s.data.choiceIndex)).toEqual([p1Choice])
+  // Leave the room page: its auto-reveal would otherwise call revealQuestion
+  // itself and race the reveal checks below. Probes still work from /home.
+  await openApp(p1.page)
 
   // --- 5. p2 and the host answer correctly; then concurrent reveals score exactly once ---
   const p2Submit = await act<{ submittedAt: number }>(p2.page, 'submitAnswer', { questionId: q0, choiceIndex: correct })
