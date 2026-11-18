@@ -433,3 +433,48 @@ Verified: tsc clean, eslint clean, vitest 58/58. Playwright not run (no spec rea
 Not verified / risks:
 - No real run yet at 12000. A run whose thinking pushes output near 12000 would take ~45–48 s at the observed rate. A slower day could exceed the 60 s timeout; that fails the room with serviceUnavailable rather than hanging.
 - Whether a higher max_tokens reserves more credits up front on this integration is undocumented. Billing is by actual usage.
+
+## 2026-11-18 — Landing page at /: research + plan (no code yet)
+
+Did: research and a plan only, waiting for approval. Nothing changed except this entry.
+
+Findings (signed-out user opening a protected page):
+- No redirect happens. `src/pages/(app)/(protected)/_layout.tsx:23` wraps pages in `<AuthGate fallback={<SignedOutPanel />}>`. SDK `AuthGate` (`node_modules/deepspace/dist/index.js:1230-1244`) renders the fallback in place, so the URL (path + query) stays the same. Its "Sign in" button opens `<AuthOverlay>` (`_layout.tsx:50`).
+- Email sign-in: `AuthOverlay` calls `signIn.email({ email, password })` with no `callbackURL` and has no navigation code (`index.js:1021-1034`). The page stays put and the gate opens once the session is set. The original URL is kept, including the query string. (The session refresh itself is better-auth's `useSession`, `index.js:892-901, 972`. I read it but didn't run it.)
+- OAuth (GitHub/Google): `window.location.href = /api/auth/social-redirect?provider=…` (`index.js:1020`). The app's route sends only the origin as `returnTo` (`src/server/http-routes.ts:94`). `/api/auth/oauth-complete` always redirects to `${origin}/home` (`http-routes.ts:107, 109, 117, 119, 125`). So the original path and query are lost and the user lands on /home. What the auth worker does between those two routes is external and not documented.
+- Docs (`docs.deep.space/guides/authentication.md`): describe the overlay fallback and `redirectOnSignOut` (default '/'). They say nothing about a return URL, `returnTo`/`callbackURL`, the post-OAuth landing path, or query strings.
+- Public email signup is closed platform-wide (same page), so real visitors will use OAuth and land on /home.
+
+Verified: read the files cited above, plus `tests/smoke.spec.ts`, which already covers signed-out `/` via `data-testid="static-landing"` and the "no /api/auth, no /ws" static contract.
+
+Not verified / risks: no flow was run in a browser. The OAuth landing is inferred from app code, not observed.
+
+## 2026-11-18 — Landing page, /home hub, shared Try-it button
+
+Did:
+- `src/pages/index.tsx`: static landing (still no hooks, no action calls, `data-testid="static-landing"` kept). It has a pitch, three links ("Create a room" → /create, "Join a room" → /join, "Try it yourself" → /home) and a 4-step how-it-works plus "play alone or share the code". Single column, `mx-auto max-w-md px-4 py-12`.
+- `src/components/SignedOutPanel.tsx`: the existing panel, moved unchanged out of `(protected)/_layout.tsx` so /home can use it. `(protected)/_layout.tsx` now imports it. Same AuthGate + AuthOverlay, nothing new built.
+- `src/components/game/TryItYourselfButton.tsx`: the app's only `createRoom({ sample: true })` call.
+  - Same label, outline variant and full width as before. It's disabled until `useMutations('rooms').ready` and while running, shows errors in a `role="alert"` line under the button, and navigates to `/room/:id` on success.
+  - The old button had no testid, so there's none to keep and none was added. Specs find it by role and name, unchanged.
+  - Optional `disabled` / `onBusyChange` props let /create lock its link form while the sample call runs, and the reverse.
+- `src/pages/(app)/(protected)/create.tsx`: uses the shared button. Its `createRoom({ url })` call is now inline in `handleSubmit`. The link form's error line now sits directly under the form, not under the sample section (each control has its own alert line now).
+- `src/pages/(app)/home.tsx`: the signed-in hub. It has ReturnToRoomLink, "Create a room" → /create, "Join a room" → /join and TryItYourselfButton, wrapped in `<AuthGate fallback={<SignedOutPanel />}>`. Signed out, it shows the panel only; the nav still renders above it. The placeholder text and the "Signed in as" line are gone (the nav shows the name).
+- `src/seo.ts`: description now matches the pitch.
+- `tests/landing.spec.ts` (new, signed out, no accounts, no writes): checks the three hrefs on /, clicks through to /create, /join and /home, sees the sign-in panel on each, and checks there's no Try-it button on /home.
+- `CLAUDE.md`: Testing line for landing.spec, plus a gotcha about where sign-in lands.
+- The sign-in flow (`social-redirect`, `oauth-complete`), createRoom, schemas and integrations are untouched. No query-string behaviour added.
+
+Verified (local dev):
+- `npx tsc --noEmit -p .` clean, `npx eslint .` clean, `npx vitest run` 58/58.
+- `npx deepspace test run all`, run twice: 23 passed both times, including the 4 new landing tests. `membership-resubscribe` ✘ is its expected `test.fail()`. No existing spec changed. `smoke.spec.ts`'s static contract (no /api/auth, no /ws on /) still passes.
+
+Check (not fixed), URLs with a room id or code that a signed-out person might open:
+- The only such URL is `/room/:roomId`, the room page's own address. ReturnToRoomLink links to it, but only for signed-in members.
+- Nothing builds a join link. The lobby shows the code as text only. /join reads no query string. The "not in this room" card links to plain `/join`.
+- So the risk is someone copying the room page's address bar and sending it to a signed-out person. With email sign-in they stay on that URL. **With Google/GitHub sign-in the room id is dropped and they land on /home** (oauth-complete always redirects there). Even with the URL kept, a non-member sees the "not in this room" card; they need the code from /join.
+
+Not verified / risks:
+- No browser run of an actual sign-in (email or OAuth) followed by pressing Try-it on /home. game-ui/lobby specs cover the button on /create only.
+- Signing out while on /home now redirects to `/` (AuthGate's `redirectOnSignOut` default). Before, /home just showed signed-out content.
+- Phone layout was checked by reading the classes only. Nothing was viewed at phone width.

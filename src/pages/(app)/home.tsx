@@ -1,34 +1,46 @@
 /**
- * Placeholder home page — replace this with the app's real home.
+ * /home: the signed-in hub. Create a room, join one, or try the sample.
  *
- * This is intentionally unstyled scaffolding, not a design to build on.
- * Design the app's own look (layout, theme tokens, typography) from your
- * product's point of view instead of extending this page.
+ * Every sign-in lands here: Google/GitHub sign-in always redirects to /home
+ * (src/server/http-routes.ts, oauth-complete), and the landing page's
+ * "Try it yourself" links here so email sign-in ends up on the same page.
+ *
+ * The page is public (it sits under (app)/, not (protected)/), so it gates
+ * itself with the same AuthGate + SignedOutPanel the protected pages use.
+ * Signed-out visitors see only that panel, never the Try-it button.
  */
 
-import { useAuthProfileReady } from 'deepspace'
+import { Link } from 'react-router-dom'
+import { AuthGate } from 'deepspace'
+import { buttonVariants } from '@/components/ui'
+import { SignedOutPanel } from '@/components/SignedOutPanel'
 import { ReturnToRoomLink } from '@/components/game/ReturnToRoomLink'
-import { APP_NAME } from '../../constants'
+import { TryItYourselfButton } from '@/components/game/TryItYourselfButton'
 
 export default function HomePage() {
-  const { isSignedIn, user } = useAuthProfileReady({ requireUser: true })
-
   return (
-    <div className="flex min-h-full flex-col items-center justify-center gap-3 bg-background px-6 text-center text-foreground">
-      <h1 className="text-2xl font-semibold">{APP_NAME}</h1>
-      <p className="max-w-md text-sm text-muted-foreground">
-        This is a placeholder page. Replace <code>src/pages/(app)/home.tsx</code>{' '}
-        with the app&apos;s real home, and give the app its own theme in{' '}
-        <code>src/themes.css</code>.
-      </p>
-      {isSignedIn && user && (
-        <>
-          <p className="text-sm text-muted-foreground">Signed in as {user.name ?? user.email}</p>
-          <div className="w-full max-w-md">
-            <ReturnToRoomLink />
+    <AuthGate fallback={<SignedOutPanel />}>
+      <div className="min-h-full text-foreground">
+        <div className="mx-auto max-w-md px-4 py-12">
+          <ReturnToRoomLink />
+          <h1 className="mb-2 text-3xl font-bold tracking-tight">Start a game</h1>
+          <p className="mb-8 text-sm text-muted-foreground">
+            Host one from an article, join with a code, or play a short sample on your own.
+          </p>
+          <div className="space-y-3">
+            <Link to="/create" className={buttonVariants({ className: 'w-full' })}>
+              Create a room
+            </Link>
+            <Link to="/join" className={buttonVariants({ variant: 'outline', className: 'w-full' })}>
+              Join a room
+            </Link>
           </div>
-        </>
-      )}
-    </div>
+          <div className="mt-8 border-t border-border pt-6">
+            <p className="mb-3 text-sm text-muted-foreground">No article handy? Play a short sample one.</p>
+            <TryItYourselfButton />
+          </div>
+        </div>
+      </div>
+    </AuthGate>
   )
 }

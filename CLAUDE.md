@@ -80,6 +80,7 @@ The core rule: **anything synced to a client is readable by that client**, even 
 Gotchas:
 
 - **`tools.create` with an explicit id overwrites an existing row.** It doesn't fail: it merges the new data over the old row (`server.js` `putRecord`: `isUpdate = existing !== null`). `uniqueOn` does not stop this, because its conflict check excludes the row's own id. The only thing that rejects it is an `immutable` column whose value differs (`Cannot modify immutable field`), and that check runs for server actions too.
+- Google/GitHub sign-in always lands on `/home` (`oauth-complete` in `src/server/http-routes.ts`); the original path and query are dropped. Email sign-in happens in place and keeps the URL. That's why `/`'s "Try it yourself" links to `/home`, and why `TryItYourselfButton` (the only `createRoom({ sample: true })` call) is on both `/home` and `/create`.
 - A user who becomes a room member while a page is already subscribed won't receive pre-existing rows on that page until it resubscribes (SDK issue, see AGENT_LOG.md). Navigate to a fresh page after joining.
 
 Room status: `generating → lobby → question → reveal → question → … → finished`, or `generating → failed` (with `errorMessage`) when the pipeline can't produce enough questions or throws, or when the host's `team_members`/`players` setup write fails. `errorMessage` is client-readable, so it is only ever one of `USER_MESSAGES` (`src/lib/questions/pipeline.ts`); raw errors go to server logs. `failed` and `finished` are terminal. Server actions reject anything that doesn't match the current status.
@@ -134,6 +135,7 @@ Don't put SDK or integration calls inside these modules. Keep them pure so the t
 - Unit: `src/lib/questions/validate.test.ts`, `fixtures.test.ts`, `markdown.test.ts`, `pipeline.test.ts` (incl. response readers and the timing inequality), `src/lib/create-room-params.test.ts`, `src/lib/scoring.test.ts` (Vitest). Run after any pipeline or scoring change.
 - No spec may call real integrations: specs create rooms only with `{ sample: true }` / the "Try it yourself" button. The real-URL path is checked by hand.
 - Runtime: `tests/game.spec.ts` covers the checks below against local dev (host, who also plays, + 2 players), driving actions via `callAction` and reading via raw `core.subscribe` probes (`tests/helpers/game.ts`).
+- Landing: `tests/landing.spec.ts` (signed out, no accounts) checks `/`'s three links and that `/create`, `/join` and `/home` show the sign-in panel (and no Try-it button on `/home`).
 - UI: `tests/game-ui.spec.ts` plays through the room page (create/join, answer, mid-question refresh, auto reveal, Next, a round closing on time with no answers).
 - Test accounts: 9 of 10 used (labels `sourcerush`, `sourcerush-game`, `sourcerush-ui`). New specs must reuse an existing label; don't create more accounts.
 - Integrity checks, run with two different signed-in users:

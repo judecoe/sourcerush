@@ -3,7 +3,8 @@
  *
  * Two ways in: paste an article link (questions are generated in the
  * background, so the room page shows "Generating questions…" first), or
- * "Try it yourself", which uses a built-in sample article and is ready at once.
+ * "Try it yourself" (TryItYourselfButton, shared with /home), which uses a
+ * built-in sample article and is ready at once.
  */
 
 import { useState, type FormEvent } from 'react'
@@ -12,6 +13,7 @@ import { useMutations } from 'deepspace'
 import { Button, Input, Label } from '@/components/ui'
 import { callAction } from '@/lib/call-action'
 import { ReturnToRoomLink } from '@/components/game/ReturnToRoomLink'
+import { TryItYourselfButton } from '@/components/game/TryItYourselfButton'
 
 export default function CreateRoomPage() {
   const navigate = useNavigate()
@@ -22,21 +24,17 @@ export default function CreateRoomPage() {
   const [busy, setBusy] = useState<'url' | 'sample' | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  async function create(params: { url: string } | { sample: true }) {
-    setBusy('url' in params ? 'url' : 'sample')
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault()
+    setBusy('url')
     setError(null)
-    const result = await callAction<{ roomId: string; code: string }>('createRoom', params)
+    const result = await callAction<{ roomId: string; code: string }>('createRoom', { url: url.trim() })
     if (result.success) {
       navigate(`/room/${result.data.roomId}`)
     } else {
       setError(result.error)
       setBusy(null)
     }
-  }
-
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault()
-    void create({ url: url.trim() })
   }
 
   return (
@@ -48,7 +46,7 @@ export default function CreateRoomPage() {
           Paste a link to an article. We'll write questions from it, and you'll get a 6-character code to
           share with players.
         </p>
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <form onSubmit={(e) => void handleSubmit(e)} className="space-y-3">
           <Label htmlFor="article-url" className="block">
             Article link
           </Label>
@@ -64,22 +62,18 @@ export default function CreateRoomPage() {
             {busy === 'url' ? 'Creating…' : 'Create room'}
           </Button>
         </form>
-        <div className="mt-8 border-t border-border pt-6">
-          <p className="mb-3 text-sm text-muted-foreground">No article handy? Play a short sample one.</p>
-          <Button
-            variant="outline"
-            onClick={() => void create({ sample: true })}
-            disabled={!ready || busy !== null}
-            className="w-full"
-          >
-            {busy === 'sample' ? 'Creating…' : 'Try it yourself'}
-          </Button>
-        </div>
         {error && (
           <p role="alert" className="mt-4 text-sm text-destructive">
             {error}
           </p>
         )}
+        <div className="mt-8 border-t border-border pt-6">
+          <p className="mb-3 text-sm text-muted-foreground">No article handy? Play a short sample one.</p>
+          <TryItYourselfButton
+            disabled={busy === 'url'}
+            onBusyChange={(sampleBusy) => setBusy(sampleBusy ? 'sample' : null)}
+          />
+        </div>
       </div>
     </div>
   )
