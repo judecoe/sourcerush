@@ -34,7 +34,8 @@ export default function CreateRoomPage() {
     const params = kind === 'url' ? { url: url.trim() } : { topic: topic.trim() }
     const result = await callAction<{ roomId: string; code: string }>('createRoom', params)
     if (result.success) {
-      navigate(`/room/${result.data.roomId}`)
+      // askName: the room page asks the host for their name first.
+      navigate(`/room/${result.data.roomId}`, { state: { askName: true } })
     } else {
       setError(result.error)
       setBusy(null)

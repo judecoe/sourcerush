@@ -102,6 +102,81 @@ test('no client can read or write a job queue', async ({ users }) => {
   expect(frames.seen.some((f) => f.includes('probe-not-a-real-job'))).toBe(false)
 })
 
+test('setDisplayName / joinRoom name: validates, used in the room, saved, lobbies only', async ({ users }) => {
+  test.setTimeout(90_000)
+  const [host, p1] = await users(2, { label: LABEL })
+  const hostTap = await tapRecordsSocket(host.page)
+  const p1Tap = await tapRecordsSocket(p1.page)
+  await Promise.all([openApp(host.page), openApp(p1.page)])
+  const tag = Math.random().toString(36).slice(2, 7)
+
+  for (const name of ['', '   ', 'x'.repeat(25), 'two\nlines', 42]) {
+    const refused = await act(p1.page, 'setDisplayName', { name })
+    console.log('[name] refuse', JSON.stringify(name), '->', JSON.stringify(refused))
+    expect(refused.success, JSON.stringify(name)).toBe(false)
+  }
+
+  // A name saved before creating a room is the host's players name.
+  const hostName = `Host ${tag}`
+  expect((await act(host.page, 'setDisplayName', { name: `  Host   ${tag} ` })).success).toBe(true)
+  const created = await act<{ roomId: string; code: string }>(host.page, 'createRoom', { sample: true })
+  expect(created.success).toBe(true)
+  if (!created.success) return
+  const { roomId, code } = created.data
+  const [roomRow] = await hostTap.probe({ collection: 'rooms', where: { roomId } })
+  const hostId = roomRow.data.hostId as string
+  /** Display names in this room's players rows: [host's, the other player's]. */
+  const names = async () => {
+    const rows = await hostTap.probe({ collection: 'players', where: { roomId } })
+    return [
+      rows.find((r) => r.data.userId === hostId)?.data.displayName,
+      rows.find((r) => r.data.userId !== hostId)?.data.displayName,
+    ]
+  }
+  expect((await names())[0]).toBe(hostName)
+
+  // joinRoom: a bad name is refused before anything is written; a good one
+  // is used in the room and saved for next time.
+  const refusedJoin = await act(p1.page, 'joinRoom', { code, name: 'two\nlines' })
+  expect(refusedJoin.success).toBe(false)
+  expect((await names())[1]).toBeUndefined()
+  const joinName = `Join ${tag}`
+  expect((await act(p1.page, 'joinRoom', { code, name: joinName })).success).toBe(true)
+  expect((await names())[1]).toBe(joinName)
+  expect((await p1Tap.probe({ collection: 'users', limit: 1 }))[0]?.data.displayName).toBe(joinName)
+
+  // The host's prompt: rename in this room only (setDisplayName with roomId).
+  const promptName = `Prompt ${tag}`
+  const prompted = await act(host.page, 'setDisplayName', { name: promptName, roomId })
+  expect(prompted.success).toBe(true)
+  expect((await names())[0]).toBe(promptName)
+
+  // Renaming in the lobby updates the players row everyone reads.
+  const lobbyName = `Lobby ${tag}`
+  const renamed = await act<{ displayName: string; renamedRooms: number }>(p1.page, 'setDisplayName', {
+    name: lobbyName,
+  })
+  console.log('[name] lobby rename ->', JSON.stringify(renamed))
+  expect(renamed.success).toBe(true)
+  if (renamed.success) expect(renamed.data.renamedRooms).toBeGreaterThanOrEqual(1)
+  expect((await names())[1]).toBe(lobbyName)
+
+  // Once the game has started, a rename doesn't touch this room.
+  expect((await act(host.page, 'openQuestion', { roomId })).success).toBe(true)
+  // The per-room rename is refused once the game has started.
+  const lateRoomRename = await act(host.page, 'setDisplayName', { name: `Late ${tag}`, roomId })
+  console.log('[name] room rename after start ->', JSON.stringify(lateRoomRename))
+  expect(lateRoomRename.success).toBe(false)
+  expect((await names())[0]).toBe(promptName)
+  const laterName = `Later ${tag}`
+  expect((await act(p1.page, 'setDisplayName', { name: laterName })).success).toBe(true)
+  expect((await names())[1]).toBe(lobbyName)
+  // But it is saved on p1's own users row.
+  // (users is read: 'own', so this returns only p1's row.)
+  const me = await p1Tap.probe({ collection: 'users', limit: 1 })
+  expect(me[0]?.data.displayName).toBe(laterName)
+})
+
 test('full round: host check, secrecy, one submission, one scoring, late rejection, refresh', async ({
   users,
 }) => {

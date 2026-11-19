@@ -6,7 +6,9 @@
  */
 
 import { useEffect, useState } from 'react'
+import { useAuth, useQuery, useUser } from 'deepspace'
 import { callAction } from '@/lib/call-action'
+import { pickDisplayName } from '@/lib/display-name'
 import { STALE_GENERATING_MS } from '@/lib/generation-timing'
 
 /** Milliseconds until `endsAt` by this device's clock, never below 0. Ticks 4x a second. */
@@ -131,4 +133,20 @@ export function useAutoReveal(
       clearTimeout(retryTimer)
     }
   }, [roomId, status, questionId, shouldReveal])
+}
+
+/**
+ * The caller's current name, for prefilling name fields: their saved
+ * `displayName`, else their sign-in name (same rule as the server's
+ * displayNameFor). Reads only their own users row (users is read: 'own').
+ */
+export function useMyDisplayName(): { name: string; loading: boolean } {
+  const { user } = useUser()
+  const { userId } = useAuth()
+  const me = useQuery<{ name?: string; displayName?: string }>('users', {
+    where: { recordId: userId ?? '' },
+    limit: 1,
+  })
+  const row = me.records[0]?.data
+  return { name: pickDisplayName(row?.displayName, row?.name ?? user?.name), loading: me.status === 'loading' }
 }

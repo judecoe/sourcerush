@@ -80,6 +80,8 @@ test('create, join, live list, refresh, rejoin, and read isolation', async ({ us
   await host.page.getByRole('button', { name: 'Try it yourself' }).click()
   await host.page.waitForURL(/\/room\/[^/]+$/, { timeout: 15_000 })
   const roomId = host.page.url().split('/room/')[1]
+  // The host is asked for their name first; keep the default.
+  await host.page.getByRole('button', { name: 'Continue' }).click()
   const code = (await host.page.getByTestId('room-code').textContent())?.trim() ?? ''
   expect(code).toMatch(/^[A-Z2-9]{6}$/)
   await expect(host.page.getByTestId('player-count')).toHaveText('1')

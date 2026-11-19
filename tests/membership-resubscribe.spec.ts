@@ -28,6 +28,8 @@ test('a page subscribed before joining sees pre-existing room rows after join', 
   await host.page.getByRole('button', { name: 'Try it yourself' }).click()
   await host.page.waitForURL(/\/room\/[^/]+$/, { timeout: 15_000 })
   const roomId = host.page.url().split('/room/')[1]
+  // The host is asked for their name first; keep the default.
+  await host.page.getByRole('button', { name: 'Continue' }).click()
   const code = (await host.page.getByTestId('room-code').textContent())?.trim() ?? ''
 
   await player.page.goto('/join')

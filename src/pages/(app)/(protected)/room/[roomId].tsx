@@ -11,10 +11,12 @@
  */
 
 import type { ReactNode } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useLocation, useNavigate, useParams, Link } from 'react-router-dom'
 import { useAuth, useMutations, useQuery } from 'deepspace'
 import { useAutoReveal, useGeneratingTooLong, useJustFinishedGenerating, useMsLeft } from '@/components/game/hooks'
+import { GameSummary } from '@/components/game/GameSummary'
 import { GeneratingStatus } from '@/components/game/GeneratingStatus'
+import { HostNamePrompt } from '@/components/game/HostNamePrompt'
 import { Leaderboard } from '@/components/game/Leaderboard'
 import { Lobby } from '@/components/game/Lobby'
 import { SourceLink } from '@/components/game/SourceLink'
@@ -60,6 +62,32 @@ export default function RoomPage() {
 
   const isHost = !!room && !!userId && room.hostId === userId
 
+  // Right after createRoom, the create page navigates here with
+  // `state.askName`, so the host picks their name before the lobby shows.
+  // It lives in browser history, so a refresh keeps the prompt; Continue
+  // replaces the entry without it. Other ways in (join, Return to room)
+  // never ask.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const askName = isHost && (location.state as { askName?: boolean } | null)?.askName === true
+  const namePrompt = askName ? (
+    <HostNamePrompt
+      roomId={roomId}
+      ready={ready}
+      onDone={() => navigate(location.pathname, { replace: true, state: null })}
+    />
+  ) : null
+  /** While generating, the prompt sits above the progress list. */
+  const withNamePrompt = (node: ReactNode) =>
+    namePrompt ? (
+      <div className="space-y-6">
+        {namePrompt}
+        {node}
+      </div>
+    ) : (
+      node
+    )
+
   const hostNewGameLink = (
     <Link to="/create" className={buttonVariants({ className: 'mt-4' })}>
       Host a new game
@@ -91,7 +119,9 @@ export default function RoomPage() {
       </div>
     )
   } else if (room.status === 'generating') {
-    body = <GeneratingStatus generationStep={room.generationStep} createdAt={rooms.records[0]?.createdAt} />
+    body = withNamePrompt(
+      <GeneratingStatus generationStep={room.generationStep} createdAt={rooms.records[0]?.createdAt} />,
+    )
   } else if (room.status === 'failed') {
     body = (
       <div data-testid="failed" className="rounded-lg border-2 border-destructive bg-card p-6">
@@ -102,7 +132,12 @@ export default function RoomPage() {
     )
   } else if (room.status === 'lobby' && justFinishedGenerating) {
     // A moment with every step ticked before the lobby appears.
-    body = <GeneratingStatus generationStep={room.generationStep} createdAt={rooms.records[0]?.createdAt} complete />
+    body = withNamePrompt(
+      <GeneratingStatus generationStep={room.generationStep} createdAt={rooms.records[0]?.createdAt} complete />,
+    )
+  } else if (room.status === 'lobby' && namePrompt) {
+    // The lobby (and the code) waits until the host has chosen a name.
+    body = namePrompt
   } else if (room.status === 'lobby') {
     body = <Lobby room={room} players={players.records} userId={userId} isHost={isHost} ready={ready} />
   } else if (room.status === 'finished') {
@@ -113,6 +148,7 @@ export default function RoomPage() {
           <SourceLink room={room} />
         </div>
         <Leaderboard players={players.records} userId={userId} />
+        <GameSummary roomId={roomId} />
         <div className="flex flex-col gap-3 sm:flex-row">
           <Link to="/create" className={buttonVariants({ className: 'flex-1' })}>
             Host a new game

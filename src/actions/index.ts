@@ -8,6 +8,7 @@ import { enqueueJob, RECORD_NOT_FOUND } from 'deepspace/worker'
 import type { ActionHandler, ActionTools, GetActionData, QueryActionData } from 'deepspace/worker'
 import type { Env } from '../../worker'
 import { parseCreateRoomParams } from '../lib/create-room-params'
+import { parseDisplayName, pickDisplayName } from '../lib/display-name'
 import { SAMPLE_PIPELINE_DEPS } from '../lib/questions/fixtures'
 import { runQuestionPipeline, USER_MESSAGES } from '../lib/questions/pipeline'
 import { stepValue } from '../lib/generation-steps'
@@ -40,12 +41,25 @@ function memberRecordId(roomId: string, userId: string): string {
   return `${roomId}:${userId}`
 }
 
-/** The caller's display name, read on the server from their users row. */
+/**
+ * The caller's display name, read on the server from their users row: the
+ * name they chose on Settings, else their sign-in name (pickDisplayName).
+ */
 async function displayNameFor(tools: ActionTools, userId: string): Promise<string> {
   const result = await tools.get('users', userId)
   if (!result.success) return 'Player'
-  const name = (result.data as GetActionData).record.data.name
-  return typeof name === 'string' && name.trim() ? name.trim() : 'Player'
+  const data = (result.data as GetActionData).record.data
+  return pickDisplayName(data.displayName, data.name)
+}
+
+/**
+ * Save a name the user chose in a room (join screen or host prompt) as
+ * their default for next time. Best effort: the room already has the name,
+ * so a failure is logged and doesn't fail the action.
+ */
+async function saveDefaultName(tools: ActionTools, userId: string, displayName: string): Promise<void> {
+  const saved = await tools.update('users', userId, { displayName })
+  if (!saved.success) console.error(`[saveDefaultName] users update failed: ${saved.error}`)
 }
 
 /** Add the user to the room's member list, which is what grants read access. */
@@ -186,6 +200,65 @@ async function queryAll<T extends Record<string, unknown>>(
 
 export const actions: Record<string, ActionHandler<Env>> = {
   /**
+   * Save the caller's chosen display name (`{ name }`, see
+   * src/lib/display-name.ts) on their users row, then rename them in every
+   * room they're active in that is still in 'lobby'. Games already under way
+   * or finished keep the name everyone saw. A failed lobby rename is logged
+   * and doesn't fail the call: the saved name is what matters.
+   *
+   * With `{ name, roomId }` (the host's prompt after createRoom) it renames
+   * the caller in that one room instead, see below.
+   */
+  setDisplayName: async ({ userId, params, tools }) => {
+    const parsed = parseDisplayName(params.name)
+    if (!parsed.ok) return { success: false, error: parsed.error }
+    const displayName = parsed.name
+
+    // With a roomId (the host's name prompt right after createRoom): rename
+    // the caller in that room only, while it's still 'generating' or
+    // 'lobby', then save the name for next time.
+    if (params.roomId !== undefined) {
+      const roomId = params.roomId
+      const room = await getData<RoomData>(tools, 'rooms', roomId)
+      if (!room || typeof roomId !== 'string') return { success: false, error: 'No such room.' }
+      if (room.status !== 'generating' && room.status !== 'lobby') {
+        return { success: false, error: 'This game has already started, so your name in it is set.' }
+      }
+      const playerId = memberRecordId(roomId, userId)
+      if (!(await getData(tools, 'players', playerId))) {
+        return { success: false, error: 'You are not in this room.' }
+      }
+      const updated = await tools.update('players', playerId, { displayName })
+      if (!updated.success) {
+        console.error(`[setDisplayName] room ${roomId}: rename failed: ${updated.error}`)
+        return { success: false, error: 'Could not save your name. Please try again.' }
+      }
+      await saveDefaultName(tools, userId, displayName)
+      return { success: true, data: { displayName, renamedRooms: 1 } }
+    }
+
+    const saved = await tools.update('users', userId, { displayName })
+    if (!saved.success) {
+      console.error(`[setDisplayName] users update failed: ${saved.error}`)
+      return { success: false, error: 'Could not save your name. Please try again.' }
+    }
+
+    // Active memberships only: retireOldMemberships keeps these few, and a
+    // room joined over 2 h ago is not still waiting in its lobby.
+    const memberships = await queryAll(tools, 'team_members', { userId, status: 'active' })
+    let renamed = 0
+    for (const membership of memberships ?? []) {
+      const roomId = membership.data.teamId
+      const room = await getData<RoomData>(tools, 'rooms', roomId)
+      if (room?.status !== 'lobby' || typeof roomId !== 'string') continue
+      const updated = await tools.update('players', memberRecordId(roomId, userId), { displayName })
+      if (updated.success) renamed++
+      else console.error(`[setDisplayName] room ${roomId}: rename failed: ${updated.error}`)
+    }
+    return { success: true, data: { displayName, renamedRooms: renamed } }
+  },
+
+  /**
    * Create a room with a fresh 6-character code. The caller is the host: a
    * room member and also a player (they get a players row, like anyone who
    * joins). Params, exactly one of:
@@ -318,6 +391,14 @@ export const actions: Record<string, ActionHandler<Env>> = {
     if (code.length !== CODE_LENGTH) {
       return { success: false, error: 'Room codes are 6 characters.' }
     }
+    // Optional `name`: the join screen sends it only when the player changed
+    // it. It's used in this room and saved as their default for next time.
+    let chosenName: string | null = null
+    if (params.name !== undefined) {
+      const parsed = parseDisplayName(params.name)
+      if (!parsed.ok) return { success: false, error: parsed.error }
+      chosenName = parsed.name
+    }
 
     // Keep the caller's active memberships few (SDK read-query limit).
     await retireOldMemberships(tools, userId)
@@ -343,6 +424,14 @@ export const actions: Record<string, ActionHandler<Env>> = {
           return { success: false, error: 'Could not join that room. Please try again.' }
         }
       }
+      if (chosenName) {
+        // A new name only reaches this room while it's still in the lobby.
+        if (room.data.status === 'lobby') {
+          const renamed = await tools.update('players', memberRecordId(roomId, userId), { displayName: chosenName })
+          if (!renamed.success) console.error(`[joinRoom] rename failed for room ${roomId}: ${renamed.error}`)
+        }
+        await saveDefaultName(tools, userId, chosenName)
+      }
       return { success: true, data: { roomId } }
     }
     if (!existing.error.startsWith(RECORD_NOT_FOUND)) {
@@ -359,7 +448,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
     // user count as "already joined" on a later call.
     const player = await tools.create(
       'players',
-      { roomId, userId, displayName: await displayNameFor(tools, userId), score: 0 },
+      { roomId, userId, displayName: chosenName ?? (await displayNameFor(tools, userId)), score: 0 },
       memberRecordId(roomId, userId),
     )
     if (!player.success) {
@@ -371,6 +460,7 @@ export const actions: Record<string, ActionHandler<Env>> = {
       console.error(`[joinRoom] membership create failed for room ${roomId}: ${member.error}`)
       return { success: false, error: 'Could not join that room. Please try again.' }
     }
+    if (chosenName) await saveDefaultName(tools, userId, chosenName)
 
     return { success: true, data: { roomId } }
   },

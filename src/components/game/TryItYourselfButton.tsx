@@ -36,7 +36,8 @@ export function TryItYourselfButton({ disabled = false, onBusyChange }: TryItYou
     setError(null)
     const result = await callAction<{ roomId: string; code: string }>('createRoom', { sample: true })
     if (result.success) {
-      navigate(`/room/${result.data.roomId}`)
+      // askName: the room page asks the host for their name first.
+      navigate(`/room/${result.data.roomId}`, { state: { askName: true } })
     } else {
       setError(result.error)
       setBusy(false)
