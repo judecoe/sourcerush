@@ -119,8 +119,16 @@ export async function searchArticle(tools: ActionTools, roomId: string, topic: s
   }
 }
 
-/** Real scrape for the pipeline. Logs duration and cost, never page text. */
-export async function scrapeArticle(tools: ActionTools, roomId: string, url: string): Promise<ScrapeResult> {
+/**
+ * Real scrape for the pipeline. Logs duration and cost, never page text.
+ * `timeoutMs` is what's left of the room's scrape budget (SCRAPE_TIMEOUT_MS).
+ */
+export async function scrapeArticle(
+  tools: ActionTools,
+  roomId: string,
+  url: string,
+  timeoutMs = SCRAPE_TIMEOUT_MS,
+): Promise<ScrapeResult> {
   const started = Date.now()
   try {
     const r = await withTimeout(
@@ -129,9 +137,9 @@ export async function scrapeArticle(tools: ActionTools, roomId: string, url: str
         formats: ['markdown'],
         onlyMainContent: true,
         // Ask Firecrawl to give up a little before we stop waiting.
-        timeout: SCRAPE_TIMEOUT_MS - 5_000,
+        timeout: timeoutMs - 5_000,
       }),
-      SCRAPE_TIMEOUT_MS,
+      timeoutMs,
       'scrape',
     )
     if (!r.success) {

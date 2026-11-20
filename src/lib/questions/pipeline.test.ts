@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { GENERATE_TIMEOUT_MS, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS, STALE_GENERATING_MS } from '../generation-timing'
+import { GENERATE_TIMEOUT_MS, MIN_SCRAPE_MS, SCRAPE_TIMEOUT_MS, SEARCH_TIMEOUT_MS, STALE_GENERATING_MS } from '../generation-timing'
 import { BROKEN_FIXTURE_CANDIDATES, FIXTURE_CANDIDATES, FIXTURE_SOURCE, SAMPLE_PIPELINE_DEPS } from './fixtures'
 import {
   GENERATE_ATTEMPTS,
   MIN_ARTICLE_CHARS,
+  runOnFirstUsableArticle,
+  shouldTryNextArticle,
   topicRoomResult,
   USER_MESSAGES,
   runQuestionPipeline,
@@ -331,13 +333,20 @@ describe('integration response readers', () => {
 describe('readSearchResponse (exa/search)', () => {
   const result = (url: unknown) => ({ title: 't', url, publishedDate: null, author: null, id: 'x' })
 
-  it('picks the first usable result and reports count and cost', () => {
+  it('returns every usable result in search order, and reports count and cost', () => {
     const { result: r, metrics } = readSearchResponse({
       results: [result('https://example.com/tides'), result('https://example.org/other')],
       costUsd: 0.005,
     })
-    expect(r).toEqual({ ok: true, url: 'https://example.com/tides' })
+    expect(r).toEqual({ ok: true, urls: ['https://example.com/tides', 'https://example.org/other'] })
     expect(metrics).toBe('results 2, costUsd 0.005')
+  })
+
+  it('drops duplicate links', () => {
+    const { result: r } = readSearchResponse({
+      results: [result('https://example.com/a'), result('https://example.com/a'), result('https://example.com/b')],
+    })
+    expect(r).toEqual({ ok: true, urls: ['https://example.com/a', 'https://example.com/b'] })
   })
 
   it('falls back to costDollars.total for the cost', () => {
@@ -362,7 +371,7 @@ describe('readSearchResponse (exa/search)', () => {
         result('https://box.com/article'), // ends in "x.com" but isn't x.com
       ],
     })
-    expect(r).toEqual({ ok: true, url: 'https://box.com/article' })
+    expect(r).toEqual({ ok: true, urls: ['https://box.com/article'] })
   })
 
   it('is not ok when nothing is usable, without naming any URL', () => {
@@ -391,5 +400,67 @@ describe('generation timing', () => {
     expect(SEARCH_TIMEOUT_MS + SCRAPE_TIMEOUT_MS + GENERATE_ATTEMPTS * GENERATE_TIMEOUT_MS).toBeLessThan(
       STALE_GENERATING_MS,
     )
+  })
+})
+
+describe('shouldTryNextArticle', () => {
+  it('moves on only when the page itself was the problem', () => {
+    expect(shouldTryNextArticle({ ok: false, userMessage: USER_MESSAGES.tooLittleText, log: [] })).toBe(true)
+    expect(shouldTryNextArticle({ ok: false, userMessage: USER_MESSAGES.pageUnreachable, log: [] })).toBe(true)
+  })
+  it('stops on service failures, bad questions, and success', () => {
+    expect(shouldTryNextArticle({ ok: false, userMessage: USER_MESSAGES.serviceUnavailable, log: [] })).toBe(false)
+    for (const message of Object.values(USER_MESSAGES)) {
+      if (message === USER_MESSAGES.tooLittleText || message === USER_MESSAGES.pageUnreachable) continue
+      expect(shouldTryNextArticle({ ok: false, userMessage: message, log: [] })).toBe(false)
+    }
+    expect(shouldTryNextArticle({ ok: true, title: 't', sourceUsed: 's', questions: [], log: [] })).toBe(false)
+  })
+  it('a too-short page really is reported as tooLittleText, before any model call', async () => {
+    const { deps, generate } = fakes([], { ok: true, title: 'Short', markdown: 'Too short.', statusCode: 200 })
+    const r = await runQuestionPipeline(URL, deps, 'topic')
+    expect(shouldTryNextArticle(r)).toBe(true)
+    expect(generate).not.toHaveBeenCalled()
+  })
+})
+
+describe('scrape budget', () => {
+  it('leaves room for at least one scrape, and is shared across pages so the worst case is unchanged', () => {
+    expect(MIN_SCRAPE_MS).toBeGreaterThan(5_000) // Firecrawl gets timeoutMs - 5 s
+    expect(MIN_SCRAPE_MS).toBeLessThanOrEqual(SCRAPE_TIMEOUT_MS)
+  })
+})
+
+describe('runOnFirstUsableArticle', () => {
+  const short: PipelineResult = { ok: false, userMessage: USER_MESSAGES.tooLittleText, log: ['only 1433 chars'] }
+  const gone: PipelineResult = { ok: false, userMessage: USER_MESSAGES.pageUnreachable, log: ['HTTP 404'] }
+  const down: PipelineResult = { ok: false, userMessage: USER_MESSAGES.serviceUnavailable, log: ['scrape failed'] }
+  const good: PipelineResult = { ok: true, title: 't', sourceUsed: 's', questions: [], log: [] }
+  const runner = (byUrl: Record<string, PipelineResult>) => vi.fn(async (u: string) => byUrl[u])
+
+  it('uses the first link when it works', async () => {
+    const run = runner({ a: good, b: good })
+    expect(await runOnFirstUsableArticle(['a', 'b'], run, () => true)).toEqual({ url: 'a', result: good })
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+  it('moves past too-short and unreachable pages to a usable one', async () => {
+    const run = runner({ a: short, b: gone, c: good })
+    const skipped: number[] = []
+    const out = await runOnFirstUsableArticle(['a', 'b', 'c'], run, () => true, (n) => skipped.push(n))
+    expect(out).toEqual({ url: 'c', result: good })
+    expect(skipped).toEqual([1, 2])
+  })
+  it('stops on a service failure without trying more pages', async () => {
+    const run = runner({ a: down, b: good })
+    expect(await runOnFirstUsableArticle(['a', 'b'], run, () => true)).toEqual({ url: 'a', result: down })
+    expect(run).toHaveBeenCalledTimes(1)
+  })
+  it('stops when the budget says no, returning the last result', async () => {
+    const run = runner({ a: short, b: good })
+    expect(await runOnFirstUsableArticle(['a', 'b'], run, () => false)).toEqual({ url: 'a', result: short })
+  })
+  it('returns the last page tried when every page is unusable', async () => {
+    const run = runner({ a: short, b: short })
+    expect(await runOnFirstUsableArticle(['a', 'b'], run, () => true)).toEqual({ url: 'b', result: short })
   })
 })

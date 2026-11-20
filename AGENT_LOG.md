@@ -712,3 +712,14 @@ Not verified / risks:
 - The baseline is presented on the page as "Today's average", with no note that it's a starting value.
 - A retry uses the next day's topic, so a failed day's topic repeats the following day.
 - Local dev DB still has the old `daily_stats`/`daily_plays` columns' data for days before today (no reset was run for them); harmless.
+
+## 2026-11-20 — Topic rooms try the next search result when a page is too short or unreachable
+Context: first deployed Quiz of the Day (release #10, 2026-11-20 00:00 ET). Logs: cron fired on time, attempt 1 ("how to brew tea") searched (5 results, $0.007), scraped the first result, got only 1433 chars of text (< MIN_ARTICLE_CHARS 2000) → failed in 4 s, no model call. The design retries at 00:15 with the next topic.
+Did:
+- `readSearchResponse` returns every usable link in order, deduplicated (`SearchResult` `{ ok, urls }`), in `src/lib/questions/responses.ts`.
+- `src/lib/questions/pipeline.ts`: `shouldTryNextArticle` (only `tooLittleText`/`pageUnreachable`, which both happen before any model call) and `runOnFirstUsableArticle` (tries links in order while that holds and the budget allows).
+- `src/lib/generation-timing.ts`: `SCRAPE_TIMEOUT_MS` is now the total scrape budget per room, plus `MIN_SCRAPE_MS` = 10 s; `scrapeArticle` takes the remaining budget as its timeout (`src/server/generation.ts`). Worst case unchanged at 160 s < 180 s.
+- `src/jobs.ts` uses it for every room (link rooms have one candidate, so behaviour is unchanged). Skipped pages are logged by number + reason, never URL. Applies to host topic rooms and the daily quiz.
+- Spec fix: `tests/game.spec.ts` asserted the outsider sees 0 `daily_plays` rows; after midnight they see their own row from yesterday (allowed). Now it asserts they never see the player's row.
+Verified: `npx tsc --noEmit` clean; `npx vitest run` 122 passed (new: all usable links in order + dedup; shouldTryNextArticle for every message; a too-short page fails before generate is called; runOnFirstUsableArticle: first works / skips short + unreachable to a good one / stops on service failure / stops when budget says no / all unusable). `npx deepspace test run all`: everything passed except the known `membership-resubscribe` failure, plus the daily spec's outsider check above (fixed, and the daily spec rerun passed).
+Not verified / risks: the real job path (Exa → several Firecrawl scrapes) has not run with this code; no spec may call integrations. Check the next deployed generation's logs for "article N unusable, trying article N+1". A skipped page costs one extra Firecrawl scrape (~$0.004). Scrape *service* errors (e.g. a site blocking Firecrawl) still end the attempt; only short or HTTP-error pages move on.

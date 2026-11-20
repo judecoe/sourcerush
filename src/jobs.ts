@@ -5,8 +5,10 @@
  * 'generate-questions' { roomId, hostId, url } or { roomId, hostId, topic }
  *   Queued by createRoom (server only: worker.ts closes the job sockets to
  *   clients) on the room's own queue, `room:${roomId}`, with maxAttempts 1.
- *   For a topic, first asks Exa for an article (searchArticle); no usable
- *   result fails the room with USER_MESSAGES.noArticleFound. Then runs the
+ *   For a topic, first asks Exa for articles (searchArticle); no usable
+ *   result fails the room with USER_MESSAGES.noArticleFound. If a page is
+ *   too short or unreachable it tries the next result, within one shared
+ *   scrape budget (SCRAPE_TIMEOUT_MS). Then runs the
  *   question pipeline on the link against the real Firecrawl + Anthropic
  *   integrations, and sets the room to 'lobby' (with sourceUrl) or 'failed'.
  *   A topic room gets the topic prompt (kind 'topic'), a link room 'link'.
@@ -33,7 +35,8 @@ import type { Job, JobContext } from 'deepspace/worker'
 import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../worker.js'
 import { stepValue } from './lib/generation-steps.js'
-import { runQuestionPipeline, topicRoomResult, USER_MESSAGES } from './lib/questions/pipeline.js'
+import { MIN_SCRAPE_MS, SCRAPE_TIMEOUT_MS } from './lib/generation-timing.js'
+import { runOnFirstUsableArticle, runQuestionPipeline, topicRoomResult, USER_MESSAGES } from './lib/questions/pipeline.js'
 import { createActionTools } from './server/action-routes.js'
 import {
   failRoom,
@@ -74,8 +77,9 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
     if (!(await stillGenerating(tools, roomId, hostId))) return
 
     // A topic room: find the article first. A failed call and "nothing
-    // usable" both end the room here, with different messages.
-    let url = payload.url
+    // usable" both end the room here, with different messages. A link room
+    // has just its own link.
+    let candidates: string[] = payload.url !== undefined ? [payload.url] : []
     if (payload.topic !== undefined) {
       const found = await searchArticle(tools, roomId, payload.topic)
       if (!found.ok) {
@@ -88,35 +92,57 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
         if (payload.dailyDay) await recordDailyGeneration(tools, payload.dailyDay, roomId, failed?.status ?? null)
         return
       }
-      url = found.url
+      candidates = found.urls
     }
-    if (url === undefined) throw new Error('job payload has neither url nor topic')
+    if (candidates.length === 0) throw new Error('job payload has neither url nor topic')
 
     let attempt = 0
     const kind = payload.topic !== undefined ? 'topic' : 'link'
+    // Every scrape in this room shares one SCRAPE_TIMEOUT_MS budget, so
+    // trying more pages never makes the worst case longer.
+    const scrapeDeadline = Date.now() + SCRAPE_TIMEOUT_MS
     // Each step is recorded just before it starts, for the room page's
     // progress list (display only; see setGenerationStep).
-    const pipelineResult = await runQuestionPipeline(
-      url,
-      {
-        scrape: async (u) => {
-          await setGenerationStep(tools, roomId, stepValue(kind, 'reading'))
-          return scrapeArticle(tools, roomId, u)
-        },
-        generate: async (system, user) => {
-          attempt += 1
-          await setGenerationStep(tools, roomId, stepValue(kind, attempt === 1 ? 'writing' : 'rewriting'))
-          const generated = await generateText(tools, roomId, attempt, system, user)
-          // The pipeline parses and validates the reply next (checking every
-          // passage against the article). A failed call ends the room instead.
-          if (generated.ok) await setGenerationStep(tools, roomId, stepValue(kind, 'checking'))
-          return generated
-        },
+    const deps = {
+      scrape: async (u: string) => {
+        await setGenerationStep(tools, roomId, stepValue(kind, 'reading'))
+        return scrapeArticle(tools, roomId, u, Math.min(SCRAPE_TIMEOUT_MS, scrapeDeadline - Date.now()))
       },
-      kind,
-      // Quiz of the Day: plain, everyday questions anyone can have a go at.
-      payload.dailyDay !== undefined,
+      generate: async (system: string, user: string) => {
+        attempt += 1
+        await setGenerationStep(tools, roomId, stepValue(kind, attempt === 1 ? 'writing' : 'rewriting'))
+        const generated = await generateText(tools, roomId, attempt, system, user)
+        // The pipeline parses and validates the reply next (checking every
+        // passage against the article). A failed call ends the room instead.
+        if (generated.ok) await setGenerationStep(tools, roomId, stepValue(kind, 'checking'))
+        return generated
+      },
+    }
+    // Quiz of the Day: plain, everyday questions anyone can have a go at.
+    const everyday = payload.dailyDay !== undefined
+
+    // Try the search results in order: a page that is too short or
+    // unreachable fails before any model call, so move on to the next one
+    // while the scrape budget lasts. Any other failure stops there.
+    let stopped = false
+    const { url, result: pipelineResult } = await runOnFirstUsableArticle(
+      candidates,
+      (u) => runQuestionPipeline(u, deps, kind, everyday),
+      async () => {
+        if (scrapeDeadline - Date.now() < MIN_SCRAPE_MS) return false
+        if (!(await stillGenerating(tools, roomId, hostId))) {
+          stopped = true
+          return false
+        }
+        return true
+      },
+      (n, skipped) => {
+        // Log lines only, never the URL (it would give the topic away).
+        for (const line of skipped.log) console.warn(`[generate] room ${roomId}: article ${n} of ${candidates.length}: ${line}`)
+        console.info(`[generate] room ${roomId}: article ${n} unusable, trying article ${n + 1}`)
+      },
     )
+    if (stopped) return
     // A topic room's host never chose the page, so "that page" messages are reworded.
     const result = payload.topic !== undefined ? topicRoomResult(pipelineResult) : pipelineResult
 

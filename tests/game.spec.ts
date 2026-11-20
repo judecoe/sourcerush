@@ -453,7 +453,9 @@ test('quiz of the day: one attempt each, solo room, private plays, compared with
   const myScore = me.data.score as number
   expect(myPlay.data).toMatchObject({ roomId, status: 'finished', score: myScore, averageAtFinish: stats0.data.averageScore, stdDevAtFinish: 0 })
   expect(myPlay.data).not.toHaveProperty('displayName')
-  expect(await outsiderTap.probe({ collection: 'daily_plays' })).toHaveLength(0)
+  // The outsider may see their own rows from other days, never the player's.
+  const outsiderSees = await outsiderTap.probe({ collection: 'daily_plays' })
+  expect(outsiderSees.filter((r) => r.data.userId === myPlay.data.userId)).toHaveLength(0)
 
   // Only after finishing does their score move the public average (baseline weighted 5).
   const [stats] = await outsiderTap.probe({ collection: 'daily_stats', where: { day } })

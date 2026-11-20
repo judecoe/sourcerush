@@ -75,6 +75,45 @@ function errorText(err: unknown): string {
 }
 
 /**
+ * True when a result failed because of the page itself (too little text, or
+ * the page returned an HTTP error), so a topic room can try the next search
+ * result. Both happen before any model call. Every other failure (the scrape
+ * or model service failing, unusable questions) is not about this page, so
+ * the job stops there.
+ */
+export function shouldTryNextArticle(result: PipelineResult): boolean {
+  return (
+    !result.ok &&
+    (result.userMessage === USER_MESSAGES.tooLittleText || result.userMessage === USER_MESSAGES.pageUnreachable)
+  )
+}
+
+/**
+ * Run the pipeline on each candidate link in order until one is usable:
+ * move on only when shouldTryNextArticle says the page itself was the
+ * problem, there is another link, and `canTryAnother()` (the job's scrape
+ * budget) agrees. `onSkip` gets the skipped page's number (1-based) and
+ * result, for logs. Returns the link used and its result (the last one
+ * tried if none worked).
+ */
+export async function runOnFirstUsableArticle(
+  urls: string[],
+  run: (url: string) => Promise<PipelineResult>,
+  canTryAnother: () => boolean | Promise<boolean>,
+  onSkip: (articleNumber: number, result: PipelineResult) => void = () => {},
+): Promise<{ url: string; result: PipelineResult }> {
+  let url = urls[0]
+  let result = await run(url)
+  for (let i = 1; i < urls.length && shouldTryNextArticle(result); i++) {
+    if (!(await canTryAnother())) break
+    onSkip(i, result)
+    url = urls[i]
+    result = await run(url)
+  }
+  return { url, result }
+}
+
+/**
  * `kind` picks the prompt: 'link' when the host chose the article, 'topic'
  * when a search found it (see buildQuestionPrompt). `everyday` (Quiz of the
  * Day only) adds the plain-language rule. Nothing else depends on them.

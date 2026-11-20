@@ -94,11 +94,13 @@ export const SEARCH_EXCLUDED_DOMAINS = [
 ] as const
 
 /**
- * The article search result: the first usable link, or not ok. `noneFound`
- * is true when the search worked but no result was usable (the host should
- * try another topic), false when the call or the response itself was bad.
+ * The article search result: every usable link, best first (at least one),
+ * or not ok. The job tries them in order when a page turns out too short or
+ * unreachable. `noneFound` is true when the search worked but no result was
+ * usable (the host should try another topic), false when the call or the
+ * response itself was bad.
  */
-export type SearchResult = { ok: true; url: string } | { ok: false; noneFound: boolean; log: string }
+export type SearchResult = { ok: true; urls: string[] } | { ok: false; noneFound: boolean; log: string }
 
 function isExcludedHost(hostname: string): boolean {
   const host = hostname.toLowerCase()
@@ -106,8 +108,8 @@ function isExcludedHost(hostname: string): boolean {
 }
 
 /**
- * The first result with an http(s) URL on an allowed site, plus a metrics
- * line for the logs. Neither the metrics nor the log line contain the topic,
+ * Every result with an http(s) URL on an allowed site, in search order and
+ * without duplicates, plus a metrics line for the logs. Neither the metrics nor the log line contain the topic,
  * a title or a URL (the URL would give the topic away).
  */
 export function readSearchResponse(data: unknown): { result: SearchResult; metrics: string } {
@@ -122,6 +124,7 @@ export function readSearchResponse(data: unknown): { result: SearchResult; metri
   }
 
   let skipped = 0
+  const urls: string[] = []
   for (const item of body.results) {
     const raw = isObject(item) && typeof item.url === 'string' ? item.url : ''
     let parsed: URL | null = null
@@ -134,8 +137,9 @@ export function readSearchResponse(data: unknown): { result: SearchResult; metri
       skipped++
       continue
     }
-    return { result: { ok: true, url: parsed.href }, metrics }
+    if (!urls.includes(parsed.href)) urls.push(parsed.href)
   }
+  if (urls.length > 0) return { result: { ok: true, urls }, metrics }
   return {
     result: {
       ok: false,
