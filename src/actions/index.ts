@@ -13,7 +13,7 @@ import { SAMPLE_PIPELINE_DEPS } from '../lib/questions/fixtures'
 import { runQuestionPipeline, USER_MESSAGES, type PipelineResult } from '../lib/questions/pipeline'
 import { stepValue } from '../lib/generation-steps'
 import { membershipsToRetire } from '../lib/room-age'
-import { dailyDay } from '../lib/daily'
+import { DAILY_QUESTION_COUNT, dailyDay, pickEvenly } from '../lib/daily'
 import {
   createDailySourceRoom,
   dailyPlayId,
@@ -523,7 +523,9 @@ export const actions: Record<string, ActionHandler<Env>> = {
 
     const source = await createDailySourceRoom(tools, day, (quiz?.attempts ?? 0) + 1, userId)
     if (!source) return { success: false, error: 'Could not seed the daily quiz.' }
-    const result = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS, 'link')
+    const sample = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS, 'link')
+    // Same rule as the job: exactly DAILY_QUESTION_COUNT questions.
+    const result = sample.ok ? { ...sample, questions: pickEvenly(sample.questions, DAILY_QUESTION_COUNT) } : sample
     const finished = await finishGeneration(tools, source.roomId, result)
     await recordDailyGeneration(tools, day, source.roomId, finished?.status ?? null)
     return { success: true, data: { day, seeded: true } }

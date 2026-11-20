@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { QUESTIONS_MIN_USABLE } from './questions/prompt'
 import {
   BASELINE_MAX,
   BASELINE_MIN,
@@ -11,7 +12,10 @@ import {
   DAILY_TOPICS,
   dailyDay,
   dailyAverage,
+  DAILY_QUESTION_COUNT,
   nextDailyStep,
+  pickEvenly,
+  topPercent,
   topicForDay,
 } from './daily'
 
@@ -107,17 +111,57 @@ describe('dailyAverage', () => {
   })
 })
 
+describe('pickEvenly', () => {
+  const twelve = Array.from({ length: 12 }, (_, i) => i)
+  it('keeps exactly the count, in order, from first to last', () => {
+    const picked = pickEvenly(twelve, DAILY_QUESTION_COUNT)
+    expect(DAILY_QUESTION_COUNT).toBe(8)
+    expect(picked).toHaveLength(8)
+    expect(picked[0]).toBe(0)
+    expect(picked[7]).toBe(11)
+    expect([...picked].sort((a, b) => a - b)).toEqual(picked)
+    expect(new Set(picked).size).toBe(8)
+  })
+  it('the pipeline always yields enough questions to keep exactly 8', () => {
+    expect(QUESTIONS_MIN_USABLE).toBeGreaterThanOrEqual(DAILY_QUESTION_COUNT)
+  })
+  it('leaves shorter lists alone', () => {
+    expect(pickEvenly([1, 2, 3], 8)).toEqual([1, 2, 3])
+    expect(pickEvenly(Array.from({ length: 8 }, (_, i) => i), 8)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])
+  })
+})
+
 describe('bellCurvePoints', () => {
   it('peaks at 1 at the mean and spans 0..max', () => {
-    const pts = bellCurvePoints(5000, 1000, 10000, 10)
+    const pts = bellCurvePoints(4000, 2000, 8000, 10)
     expect(pts).toHaveLength(11)
     expect(pts[0].x).toBe(0)
-    expect(pts[10].x).toBe(10000)
+    expect(pts[10].x).toBe(8000)
     expect(pts[5].y).toBeCloseTo(1)
     expect(pts[4].y).toBeCloseTo(pts[6].y)
   })
-  it('keeps a visible curve when everyone has the same score', () => {
-    const pts = bellCurvePoints(5000, 0, 10000, 10)
-    expect(pts[4].y).toBeGreaterThan(0.01)
+  it('stays wide and gradual when the real spread is 0 (early in the day)', () => {
+    const pts = bellCurvePoints(2500, 0, 8000, 80)
+    // 1000 points from the average, the curve is still well above half height.
+    const at = (x: number) => pts.find((p) => p.x === x)!.y
+    expect(at(3500)).toBeGreaterThan(0.6)
+    // and it never drops off a cliff between neighbouring points.
+    for (let i = 1; i < pts.length; i++) expect(Math.abs(pts[i].y - pts[i - 1].y)).toBeLessThan(0.05)
+  })
+})
+
+describe('topPercent', () => {
+  it('is 50 at the average, smaller above it, larger below it', () => {
+    expect(topPercent(4000, 4000, 2000, 8000)).toBe(50)
+    expect(topPercent(6000, 4000, 2000, 8000)).toBe(16)
+    expect(topPercent(2000, 4000, 2000, 8000)).toBe(84)
+  })
+  it('never says top 0% or top 100%', () => {
+    expect(topPercent(8000, 2000, 0, 8000)).toBe(1)
+    expect(topPercent(0, 6000, 0, 8000)).toBe(99)
+  })
+  it('uses the same minimum spread as the curve', () => {
+    // Spread 0 → 18% of 8000 = 1440: one spread above the average is top 16%.
+    expect(topPercent(2500 + 1440, 2500, 0, 8000)).toBe(16)
   })
 })

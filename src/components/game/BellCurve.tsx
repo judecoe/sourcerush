@@ -3,7 +3,8 @@
  *
  * Clients never see other players' scores, only an average and spread (the
  * ones saved when you finished), so this is a normal curve fitted to those
- * two numbers (bellCurvePoints), not a plot of real scores. Plain SVG, colored
+ * two numbers (bellCurvePoints), not a plot of real scores. Its spread never
+ * goes below CURVE_MIN_SPREAD of the range, so it stays wide and gradual. Plain SVG, colored
  * with theme tokens through currentColor so it follows light/dark mode.
  */
 

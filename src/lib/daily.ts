@@ -122,23 +122,69 @@ export function dailyAverage(baseline: number, scores: number[]): DailyAverage {
   return { averageScore: Math.round(mean), stdDev: Math.round(Math.sqrt(variance)) }
 }
 
+/** The Quiz of the Day always has exactly this many questions. */
+export const DAILY_QUESTION_COUNT = 8
+
+/**
+ * `count` items spread evenly from first to last, keeping their order.
+ * Questions arrive easiest first, so this keeps the difficulty ramp (always
+ * the first and the last). Fewer items than `count` come back unchanged.
+ */
+export function pickEvenly<T>(items: T[], count: number): T[] {
+  if (items.length <= count) return [...items]
+  if (count <= 1) return items.slice(0, count)
+  const picked: T[] = []
+  for (let i = 0; i < count; i++) picked.push(items[Math.round((i * (items.length - 1)) / (count - 1))])
+  return picked
+}
+
+/**
+ * The narrowest the bell curve gets, as a share of the score range. Early in
+ * the day (few players) the real spread is small or 0; this keeps the curve
+ * wide and gradual. The same spread is used for "top X%", so the number
+ * matches where the You marker sits on the curve.
+ */
+export const CURVE_MIN_SPREAD = 0.18
+
+/** The spread the curve (and "top X%") uses: the real one, or the minimum. */
+function curveSpread(stdDev: number, maxScore: number): number {
+  return Math.max(stdDev, maxScore * CURVE_MIN_SPREAD, 1)
+}
+
 /**
  * Points of a bell (normal) curve with this mean and spread, from 0 to
- * `maxScore`, with y scaled so the peak is 1. With one player (or everyone
- * on the same score) the spread is 0, so it's floored at 5% of the range to
- * keep a visible curve.
+ * `maxScore`, with y scaled so the peak is 1.
  */
 export function bellCurvePoints(
   mean: number,
   stdDev: number,
   maxScore: number,
-  steps = 60,
+  steps = 120,
 ): { x: number; y: number }[] {
-  const sd = Math.max(stdDev, maxScore * 0.05, 1)
+  const sd = curveSpread(stdDev, maxScore)
   const points: { x: number; y: number }[] = []
   for (let i = 0; i <= steps; i++) {
     const x = (maxScore * i) / steps
     points.push({ x, y: Math.exp(-((x - mean) ** 2) / (2 * sd * sd)) })
   }
   return points
+}
+
+/**
+ * "Top X% of players": the share of the curve at or above this score, from
+ * 1 to 99 (never "top 0%" or "top 100%"). An estimate from the average and
+ * spread the player was compared with, since clients never see other
+ * players' scores.
+ */
+export function topPercent(score: number, mean: number, stdDev: number, maxScore: number): number {
+  const below = normalCdf((score - mean) / curveSpread(stdDev, maxScore))
+  return Math.min(99, Math.max(1, Math.round((1 - below) * 100)))
+}
+
+/** Standard normal CDF (Abramowitz & Stegun 7.1.26 erf approximation, error < 1.5e-7). */
+function normalCdf(z: number): number {
+  const t = 1 / (1 + 0.3275911 * (Math.abs(z) / Math.SQRT2))
+  const poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 + t * (-1.453152027 + t * 1.061405429))))
+  const erf = 1 - poly * Math.exp(-(z * z) / 2)
+  return z >= 0 ? (1 + erf) / 2 : (1 - erf) / 2
 }

@@ -35,6 +35,7 @@ import type { Job, JobContext } from 'deepspace/worker'
 import type { ActionTools } from 'deepspace/worker'
 import type { Env } from '../worker.js'
 import { stepValue } from './lib/generation-steps.js'
+import { DAILY_QUESTION_COUNT, pickEvenly } from './lib/daily.js'
 import { MIN_SCRAPE_MS, SCRAPE_TIMEOUT_MS } from './lib/generation-timing.js'
 import { runOnFirstUsableArticle, runQuestionPipeline, topicRoomResult, USER_MESSAGES } from './lib/questions/pipeline.js'
 import { createActionTools } from './server/action-routes.js'
@@ -144,7 +145,11 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
     )
     if (stopped) return
     // A topic room's host never chose the page, so "that page" messages are reworded.
-    const result = payload.topic !== undefined ? topicRoomResult(pipelineResult) : pipelineResult
+    let result = payload.topic !== undefined ? topicRoomResult(pipelineResult) : pipelineResult
+    // The Quiz of the Day always has exactly DAILY_QUESTION_COUNT (8): the
+    // pipeline guarantees at least that many, and pickEvenly keeps the
+    // easiest-to-hardest ramp.
+    if (everyday && result.ok) result = { ...result, questions: pickEvenly(result.questions, DAILY_QUESTION_COUNT) }
 
     // Up to ~150 s have passed; don't overwrite a room that moved on.
     if (!(await stillGenerating(tools, roomId, hostId))) return

@@ -1,7 +1,7 @@
 /**
  * After finishing the Quiz of the Day: your score compared with the day's
- * average from just before you finished (your own score isn't in it), and
- * where you land on the bell curve. Used on the daily room's Game over
+ * average from just before you finished (your own score isn't in it), your
+ * estimated "top X%" of players, and where you land on the bell curve. Used on the daily room's Game over
  * screen and on /daily.
  *
  * Reads the caller's own daily_plays row (only theirs is synced), where the
@@ -10,7 +10,7 @@
  */
 
 import { useQuery } from 'deepspace'
-import { MAX_POINTS_PER_QUESTION } from '@/lib/daily'
+import { MAX_POINTS_PER_QUESTION, topPercent } from '@/lib/daily'
 import { BellCurve } from './BellCurve'
 import type { DailyPlay, DailyStats } from './types'
 
@@ -28,6 +28,10 @@ export function DailyResult({ day }: { day: string }) {
   const average = play.averageAtFinish
   const diff = myScore - average
   const maxScore = (stats.questionCount ?? 0) * MAX_POINTS_PER_QUESTION
+  const stdDev = play.stdDevAtFinish ?? 0
+  // Estimated from the same average and spread the curve is drawn from, so
+  // it matches where the You marker sits.
+  const top = topPercent(myScore, average, stdDev, maxScore)
 
   return (
     <section data-testid="daily-result" className="space-y-4 rounded-lg border border-border bg-card p-4 shadow-card">
@@ -45,12 +49,15 @@ export function DailyResult({ day }: { day: string }) {
           </p>
         </div>
       </div>
-      <p data-testid="daily-relative" className="text-sm">
+      <p data-testid="daily-top-percent" className="font-display text-lg font-bold">
+        Top {top}% of players
+      </p>
+      <p data-testid="daily-relative" className="text-sm text-muted-foreground">
         {diff === 0
           ? 'Right on the average.'
           : `${Math.abs(diff).toLocaleString()} points ${diff > 0 ? 'above' : 'below'} the average.`}
       </p>
-      <BellCurve mean={average} stdDev={play.stdDevAtFinish ?? 0} maxScore={maxScore} myScore={myScore} />
+      <BellCurve mean={average} stdDev={stdDev} maxScore={maxScore} myScore={myScore} />
     </section>
   )
 }

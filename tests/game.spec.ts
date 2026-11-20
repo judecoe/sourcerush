@@ -12,7 +12,7 @@ import { test, expect, loadAllTestAccounts } from 'deepspace/testing'
 import { FIXTURE_CANDIDATES } from '../src/lib/questions/fixtures'
 import type { Question } from '../src/lib/questions/validate'
 import { QUESTION_DURATION_MS, scoreFor } from '../src/lib/scoring'
-import { baselineAverage, dailyAverage, dailyDay } from '../src/lib/daily'
+import { baselineAverage, dailyAverage, dailyDay, topPercent } from '../src/lib/daily'
 import { act, openApp, tapRecordsSocket } from './helpers/game'
 
 const LABEL = 'sourcerush-game'
@@ -390,7 +390,8 @@ test('quiz of the day: one attempt each, solo room, private plays, compared with
   // With nobody finished yet, it is the day's baseline (2000–3000).
   const [stats0] = await outsiderTap.probe({ collection: 'daily_stats', where: { day } })
   console.log('[daily] stats before ->', JSON.stringify(stats0.data))
-  expect(stats0.data).toMatchObject({ status: 'ready', questionCount: FIXTURES.length, averageScore: baselineAverage(day), stdDev: 0 })
+  expect(FIXTURES.length).toBe(8) // the daily quiz is always 8 questions
+  expect(stats0.data).toMatchObject({ status: 'ready', questionCount: 8, averageScore: baselineAverage(day), stdDev: 0 })
   const allowed = ['averageScore', 'day', 'questionCount', 'status', 'stdDev', 'title']
   for (const key of Object.keys(stats0.data)) expect(allowed, `daily_stats field ${key}`).toContain(key)
   for (const tap of [playerTap, outsiderTap]) {
@@ -475,6 +476,9 @@ test('quiz of the day: one attempt each, solo room, private plays, compared with
     (stats0.data.averageScore as number).toLocaleString('en-US'),
   )
   await expect(player.page.getByTestId('daily-relative')).toContainText('points above the average')
+  await expect(player.page.getByTestId('daily-top-percent')).toHaveText(
+    `Top ${topPercent(myScore, stats0.data.averageScore as number, 0, FIXTURES.length * 1000)}% of players`,
+  )
   await expect(player.page.getByTestId('bell-curve-you')).toHaveCount(1)
   await outsider.page.goto('/home')
   await expect(outsider.page.getByTestId('daily-card')).toBeVisible({ timeout: 15_000 })
