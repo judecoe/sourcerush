@@ -47,8 +47,15 @@ const WRONG_CHOICES: Record<SourceKind, string> = {
 export const DIFFICULTY_RAMP =
   "- Vary the difficulty: make most questions straightforward, some medium, and two or three harder. Put them in order from easiest to hardest.";
 
-export function systemPrompt(kind: SourceKind): string {
-  return `${OPENING[kind]}
+/**
+ * Added only for the Quiz of the Day (`everyday`), which everyone plays:
+ * keep it to common knowledge and plain language.
+ */
+export const EVERYDAY_RULE =
+  "- Write for a general audience: everyday language, no jargon or specialist terms, and questions about things most people meet in daily life. Everyone should have a fair chance at most questions.";
+
+export function systemPrompt(kind: SourceKind, everyday = false): string {
+  return `${OPENING[kind]}${everyday ? `\n${EVERYDAY_RULE}` : ""}
 - Favor questions about claims, reasons, causes, and consequences over trivia like exact dates or spellings.
 - Each question has exactly 4 choices and exactly one correct answer.
 ${WRONG_CHOICES[kind]}
@@ -80,7 +87,11 @@ export function trimSource(text: string): string {
   return text.length > MAX_SOURCE_CHARS ? text.slice(0, MAX_SOURCE_CHARS) : text;
 }
 
-export function buildQuestionPrompt({ title, text }: PromptInput, kind: SourceKind): BuiltPrompt {
+export function buildQuestionPrompt(
+  { title, text }: PromptInput,
+  kind: SourceKind,
+  everyday = false,
+): BuiltPrompt {
   const sourceUsed = trimSource(text);
   const about = kind === "topic" ? "the topic of the following source" : "the following source";
 
@@ -90,7 +101,7 @@ export function buildQuestionPrompt({ title, text }: PromptInput, kind: SourceKi
 ${sourceUsed}
 </source>`;
 
-  return { system: systemPrompt(kind), user, sourceUsed };
+  return { system: systemPrompt(kind, everyday), user, sourceUsed };
 }
 
 function escapeAttr(s: string): string {

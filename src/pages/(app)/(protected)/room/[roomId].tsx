@@ -14,7 +14,9 @@ import type { ReactNode } from 'react'
 import { useLocation, useNavigate, useParams, Link } from 'react-router-dom'
 import { useAuth, useMutations, useQuery } from 'deepspace'
 import { useAutoReveal, useGeneratingTooLong, useJustFinishedGenerating, useMsLeft } from '@/components/game/hooks'
+import { DailyResult } from '@/components/game/DailyResult'
 import { GameSummary } from '@/components/game/GameSummary'
+import { OpenQuestionButton } from '@/components/game/OpenQuestionButton'
 import { GeneratingStatus } from '@/components/game/GeneratingStatus'
 import { HostNamePrompt } from '@/components/game/HostNamePrompt'
 import { Leaderboard } from '@/components/game/Leaderboard'
@@ -138,6 +140,33 @@ export default function RoomPage() {
   } else if (room.status === 'lobby' && namePrompt) {
     // The lobby (and the code) waits until the host has chosen a name.
     body = namePrompt
+  } else if (room.status === 'lobby' && room.dailyDay) {
+    // Quiz of the Day: a solo room, so no code to share and no player list.
+    body = (
+      <div data-testid="daily-lobby" className="animate-enter space-y-6">
+        <header>
+          <p className="font-display text-xs font-bold uppercase tracking-widest text-primary">Quiz of the Day</p>
+          {room.sourceTitle && <h1 className="mt-1 text-2xl font-bold">{room.sourceTitle}</h1>}
+          <p className="mt-2 text-sm text-muted-foreground">60 seconds per question. Your first attempt is the one that counts.</p>
+        </header>
+        {isHost && <OpenQuestionButton roomId={room.roomId} ready={ready} label="Start" />}
+      </div>
+    )
+  } else if (room.status === 'finished' && room.dailyDay) {
+    body = (
+      <div data-testid="finished" className="animate-enter space-y-6">
+        <div className="space-y-2">
+          <p className="font-display text-xs font-bold uppercase tracking-widest text-primary">Quiz of the Day</p>
+          <h1 className="text-2xl font-bold">Game over</h1>
+          <SourceLink room={room} />
+        </div>
+        <DailyResult day={room.dailyDay} />
+        <GameSummary roomId={roomId} />
+        <Link to="/home" className={buttonVariants({ variant: 'outline', className: 'w-full' })}>
+          Back to home
+        </Link>
+      </div>
+    )
   } else if (room.status === 'lobby') {
     body = <Lobby room={room} players={players.records} userId={userId} isHost={isHost} ready={ready} />
   } else if (room.status === 'finished') {

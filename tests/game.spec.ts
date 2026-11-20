@@ -12,6 +12,7 @@ import { test, expect, loadAllTestAccounts } from 'deepspace/testing'
 import { FIXTURE_CANDIDATES } from '../src/lib/questions/fixtures'
 import type { Question } from '../src/lib/questions/validate'
 import { QUESTION_DURATION_MS, scoreFor } from '../src/lib/scoring'
+import { baselineAverage, dailyAverage, dailyDay } from '../src/lib/daily'
 import { act, openApp, tapRecordsSocket } from './helpers/game'
 
 const LABEL = 'sourcerush-game'
@@ -367,4 +368,139 @@ test('full round: host check, secrecy, one submission, one scoring, late rejecti
   )
   expect(scoresAfter).toEqual(scores)
   expect(QUESTION_DURATION_MS).toBe(60_000)
+})
+
+test('quiz of the day: one attempt each, solo room, private plays, compared with the average before you', async ({
+  users,
+}) => {
+  test.setTimeout(180_000)
+  // outsider reads, tries to join, and at the end plays as the second finisher.
+  const [player, outsider] = await users(2, { label: LABEL })
+  const playerTap = await tapRecordsSocket(player.page)
+  const outsiderTap = await tapRecordsSocket(outsider.page)
+  await Promise.all([openApp(player.page), openApp(outsider.page)])
+  const day = dailyDay(Date.now())
+
+  // Local dev has no cron generation: clear today and seed it from the free sample.
+  const seeded = await act<{ day: string; seeded: boolean }>(player.page, 'devSeedDailyQuiz', { reset: true })
+  console.log('[daily] seed ->', JSON.stringify(seeded))
+  expect(seeded).toMatchObject({ success: true, data: { seeded: true } })
+
+  // The public summary: readable by anyone signed in, only the day's average.
+  // With nobody finished yet, it is the day's baseline (2000–3000).
+  const [stats0] = await outsiderTap.probe({ collection: 'daily_stats', where: { day } })
+  console.log('[daily] stats before ->', JSON.stringify(stats0.data))
+  expect(stats0.data).toMatchObject({ status: 'ready', questionCount: FIXTURES.length, averageScore: baselineAverage(day), stdDev: 0 })
+  const allowed = ['averageScore', 'day', 'questionCount', 'status', 'stdDev', 'title']
+  for (const key of Object.keys(stats0.data)) expect(allowed, `daily_stats field ${key}`).toContain(key)
+  for (const tap of [playerTap, outsiderTap]) {
+    for (const collection of ['daily_quizzes', 'answerKeys', 'sources']) {
+      expect(await tap.probe({ collection }), `no ${collection} rows`).toHaveLength(0)
+    }
+  }
+
+  // Two Play calls at once: both get the same room (one attempt per day).
+  const [a, b] = await Promise.all([
+    act<{ roomId: string; alreadyPlayed: boolean }>(player.page, 'playDailyQuiz'),
+    act<{ roomId: string; alreadyPlayed: boolean }>(player.page, 'playDailyQuiz'),
+  ])
+  console.log('[daily] concurrent plays ->', JSON.stringify([a, b]))
+  expect(a.success && b.success).toBe(true)
+  if (!a.success || !b.success) return
+  expect(a.data.roomId).toBe(b.data.roomId)
+  expect([a.data.alreadyPlayed, b.data.alreadyPlayed].filter((x) => !x)).toHaveLength(1)
+  const roomId = a.data.roomId
+
+  await openApp(player.page) // fresh page after becoming a member
+  const [room] = await playerTap.probe({ collection: 'rooms', where: { roomId } })
+  expect(room.data.dailyDay).toBe(day)
+
+  // Nobody can join a daily room by its code.
+  expect(await act(outsider.page, 'joinRoom', { code: room.data.code })).toEqual({
+    success: false,
+    error: 'No room with that code.',
+  })
+
+  // Play every question; the player is the only player, so each round
+  // closes as soon as they answer. `correctOnly` picks the right answer,
+  // else always the first choice.
+  async function playThrough(
+    page: typeof player.page,
+    tap: typeof playerTap,
+    id: string,
+    correctOnly: boolean,
+  ) {
+    let rounds = 0
+    for (;;) {
+      const opened = await act<{ status: string; questionId?: string }>(page, 'openQuestion', { roomId: id })
+      expect(opened.success).toBe(true)
+      if (!opened.success || opened.data.status === 'finished') break
+      const [q] = await tap.probe({ collection: 'questions', where: { roomId: id, index: rounds } })
+      const choice = correctOnly ? correctChoiceIndex(q.data.prompt as string, q.data.choices as string[]) : 0
+      expect((await act(page, 'submitAnswer', { questionId: opened.data.questionId, choiceIndex: choice })).success).toBe(true)
+      expect((await act(page, 'revealQuestion', { roomId: id })).success).toBe(true)
+      rounds++
+    }
+    expect(rounds).toBe(FIXTURES.length)
+  }
+  await playThrough(player.page, playerTap, roomId, true)
+
+  // The player's own play row: finished, with their score, compared with the
+  // average from BEFORE they finished. Nobody else reads it.
+  const [myPlay] = await playerTap.probe({ collection: 'daily_plays', where: { day } })
+  console.log('[daily] my play ->', JSON.stringify(myPlay?.data))
+  const [me] = await playerTap.probe({ collection: 'players', where: { roomId } })
+  const myScore = me.data.score as number
+  expect(myPlay.data).toMatchObject({ roomId, status: 'finished', score: myScore, averageAtFinish: stats0.data.averageScore, stdDevAtFinish: 0 })
+  expect(myPlay.data).not.toHaveProperty('displayName')
+  expect(await outsiderTap.probe({ collection: 'daily_plays' })).toHaveLength(0)
+
+  // Only after finishing does their score move the public average (baseline weighted 5).
+  const [stats] = await outsiderTap.probe({ collection: 'daily_stats', where: { day } })
+  console.log('[daily] stats after ->', JSON.stringify(stats.data))
+  expect(stats.data).toMatchObject(dailyAverage(baselineAverage(day), [myScore]))
+
+  // Playing again just returns the same room.
+  const again = await act<{ roomId: string; alreadyPlayed: boolean }>(player.page, 'playDailyQuiz')
+  expect(again).toMatchObject({ success: true, data: { roomId, alreadyPlayed: true } })
+
+  // UI: /daily shows the result against the earlier average, with the curve
+  // and the player's marker; home shows today's (new) average and no top player.
+  await player.page.goto('/daily')
+  await expect(player.page.getByTestId('daily-result')).toBeVisible({ timeout: 15_000 })
+  await expect(player.page.getByTestId('daily-my-score')).toHaveText(myScore.toLocaleString('en-US'))
+  await expect(player.page.getByTestId('daily-average-at-finish')).toHaveText(
+    (stats0.data.averageScore as number).toLocaleString('en-US'),
+  )
+  await expect(player.page.getByTestId('daily-relative')).toContainText('points above the average')
+  await expect(player.page.getByTestId('bell-curve-you')).toHaveCount(1)
+  await outsider.page.goto('/home')
+  await expect(outsider.page.getByTestId('daily-card')).toBeVisible({ timeout: 15_000 })
+  await expect(outsider.page.getByTestId('daily-average')).toHaveText(
+    (stats.data.averageScore as number).toLocaleString('en-US'),
+  )
+  await expect(outsider.page.getByText(/top score/i)).toHaveCount(0)
+
+  // A second player is compared with the average that includes the first
+  // player but not themselves; then their score joins the average too.
+  const second = await act<{ roomId: string }>(outsider.page, 'playDailyQuiz')
+  expect(second.success).toBe(true)
+  if (!second.success) return
+  await openApp(outsider.page)
+  await playThrough(outsider.page, outsiderTap, second.data.roomId, false)
+  const [theirPlay] = await outsiderTap.probe({ collection: 'daily_plays', where: { day } })
+  const [them] = await outsiderTap.probe({ collection: 'players', where: { roomId: second.data.roomId } })
+  console.log('[daily] second play ->', JSON.stringify(theirPlay?.data))
+  expect(theirPlay.data).toMatchObject({
+    status: 'finished',
+    score: them.data.score,
+    averageAtFinish: stats.data.averageScore,
+    stdDevAtFinish: stats.data.stdDev,
+  })
+  const [statsAfter2] = await playerTap.probe({ collection: 'daily_stats', where: { day } })
+  console.log('[daily] stats after 2 ->', JSON.stringify(statsAfter2.data))
+  expect(statsAfter2.data).toMatchObject(dailyAverage(baselineAverage(day), [myScore, them.data.score as number]))
+  // The first player's saved result didn't move.
+  const [myPlayLater] = await playerTap.probe({ collection: 'daily_plays', where: { day } })
+  expect(myPlayLater.data.averageAtFinish).toBe(stats0.data.averageScore)
 })

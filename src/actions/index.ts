@@ -10,9 +10,17 @@ import type { Env } from '../../worker'
 import { parseCreateRoomParams } from '../lib/create-room-params'
 import { parseDisplayName, pickDisplayName } from '../lib/display-name'
 import { SAMPLE_PIPELINE_DEPS } from '../lib/questions/fixtures'
-import { runQuestionPipeline, USER_MESSAGES } from '../lib/questions/pipeline'
+import { runQuestionPipeline, USER_MESSAGES, type PipelineResult } from '../lib/questions/pipeline'
 import { stepValue } from '../lib/generation-steps'
 import { membershipsToRetire } from '../lib/room-age'
+import { dailyDay } from '../lib/daily'
+import {
+  createDailySourceRoom,
+  dailyPlayId,
+  recordDailyFinish,
+  recordDailyGeneration,
+  type DailyQuizData,
+} from '../server/daily'
 import { QUESTION_DURATION_MS, scoreFor } from '../lib/scoring'
 import {
   failRoom,
@@ -150,6 +158,7 @@ type RoomData = {
   status: string
   currentIndex: number
   endsAt?: number
+  dailyDay?: string
 }
 
 type QuestionData = { roomId: string; index: number }
@@ -196,6 +205,110 @@ async function queryAll<T extends Record<string, unknown>>(
     return null
   }
   return (result.data as QueryActionData<T>).records
+}
+
+/**
+ * Create a room in 'generating' with a fresh 6-character code, hosted by
+ * `userId`, and give the host their team_members and players rows (the host
+ * plays too). `fields` are extra room columns (generationStep, dailyDay).
+ * Shared by createRoom and playDailyQuiz.
+ *
+ * If the host's membership or player write fails, the room is marked
+ * 'failed' and this returns an error: the host may not be able to read the
+ * room, so there's no room page to send them to.
+ */
+async function createHostedRoom(
+  tools: ActionTools,
+  userId: string,
+  roomId: string,
+  fields: Record<string, unknown>,
+): Promise<{ ok: true; code: string } | { ok: false; error: string }> {
+  const couldNotCreate = { ok: false as const, error: 'Could not create a room. Please try again.' }
+
+  // Codes are unique via `uniqueOn: ['code']`. On a collision the create is
+  // refused with a "Duplicate: ..." error and nothing is written, so retry
+  // with a new code.
+  let code = ''
+  for (let attempt = 1; attempt <= CODE_ATTEMPTS; attempt++) {
+    code = randomRoomCode()
+    const created = await tools.create(
+      'rooms',
+      {
+        roomId,
+        code,
+        hostId: userId,
+        status: 'generating',
+        sourceTitle: '',
+        sourceUrl: '',
+        currentIndex: -1,
+        answeredCount: 0,
+        ...fields,
+      },
+      roomId,
+    )
+    if (created.success) break
+    if (!created.error.startsWith('Duplicate:') || attempt === CODE_ATTEMPTS) {
+      console.error(`[createRoom] room create failed (attempt ${attempt}): ${created.error}`)
+      return couldNotCreate
+    }
+    console.warn(`[createRoom] code collision on attempt ${attempt}, retrying`)
+  }
+
+  const setupFailed = 'Could not set up this room. Please try again.'
+  const member = await addMember(tools, roomId, userId)
+  if (!member.success) {
+    console.error(`[createRoom] host membership failed for room ${roomId}: ${member.error}`)
+    await failRoom(tools, roomId, setupFailed)
+    return couldNotCreate
+  }
+
+  // The host plays too: same players row joinRoom creates.
+  const player = await tools.create(
+    'players',
+    { roomId, userId, displayName: await displayNameFor(tools, userId), score: 0 },
+    memberRecordId(roomId, userId),
+  )
+  if (!player.success) {
+    console.error(`[createRoom] host player row failed for room ${roomId}: ${player.error}`)
+    await failRoom(tools, roomId, setupFailed)
+    return couldNotCreate
+  }
+  return { ok: true, code }
+}
+
+/**
+ * Today's quiz as a pipeline result, read from the day's source room
+ * (answerKeys in question order, plus its source), so a player's room can
+ * store it through finishGeneration exactly like a freshly generated quiz.
+ * Choices keep their stored order. Null if the quiz isn't ready or a read fails.
+ */
+async function loadDailyQuiz(
+  tools: ActionTools,
+  day: string,
+): Promise<{ result: Extract<PipelineResult, { ok: true }>; sourceUrl: string } | null> {
+  const quiz = await getData<DailyQuizData>(tools, 'daily_quizzes', day)
+  if (!quiz || quiz.status !== 'ready') return null
+  const sourceRoomId = quiz.sourceRoomId
+  const room = await getData<{ sourceTitle?: string; sourceUrl?: string }>(tools, 'rooms', sourceRoomId)
+  const source = await getData<{ fullText: string }>(tools, 'sources', sourceRoomId)
+  const keys = await queryAll<AnswerKeyData & { index: number }>(tools, 'answerKeys', { roomId: sourceRoomId })
+  if (!room || !source || !keys || keys.length === 0) {
+    console.error(`[daily] ${day}: source room ${sourceRoomId} is missing its room, source or answer keys`)
+    return null
+  }
+  const questions = [...keys]
+    .sort((a, b) => a.data.index - b.data.index)
+    .map(({ data }) => ({
+      prompt: data.prompt,
+      choices: data.choices as [string, string, string, string],
+      correctIndex: data.correctIndex,
+      passage: data.passage,
+      explanation: data.explanation,
+    }))
+  return {
+    result: { ok: true, title: room.sourceTitle ?? '', sourceUsed: source.fullText, questions, log: [] },
+    sourceUrl: room.sourceUrl ?? '',
+  }
 }
 
 export const actions: Record<string, ActionHandler<Env>> = {
@@ -298,59 +411,18 @@ export const actions: Record<string, ActionHandler<Env>> = {
     }
 
     const roomId = crypto.randomUUID()
-
-    // Codes are unique via `uniqueOn: ['code']`. On a collision the create is
-    // refused with a "Duplicate: ..." error and nothing is written, so retry
-    // with a new code.
-    let code = ''
-    for (let attempt = 1; attempt <= CODE_ATTEMPTS; attempt++) {
-      code = randomRoomCode()
-      const created = await tools.create(
-        'rooms',
-        {
-          roomId,
-          code,
-          hostId: userId,
-          status: 'generating',
-          sourceTitle: '',
-          sourceUrl: '',
-          currentIndex: -1,
-          answeredCount: 0,
-          // First step for the progress list; the job advances it. The sample
-          // skips straight to 'lobby', so it has none.
-          ...(request.kind === 'sample'
-            ? {}
-            : { generationStep: stepValue(request.kind === 'topic' ? 'topic' : 'link', 'searching') }),
-        },
-        roomId,
-      )
-      if (created.success) break
-      if (!created.error.startsWith('Duplicate:') || attempt === CODE_ATTEMPTS) {
-        console.error(`[createRoom] room create failed (attempt ${attempt}): ${created.error}`)
-        return { success: false, error: 'Could not create a room. Please try again.' }
-      }
-      console.warn(`[createRoom] code collision on attempt ${attempt}, retrying`)
-    }
-
-    const setupFailed = 'Could not set up this room. Please try again.'
-    const member = await addMember(tools, roomId, userId)
-    if (!member.success) {
-      console.error(`[createRoom] host membership failed for room ${roomId}: ${member.error}`)
-      await failRoom(tools, roomId, setupFailed)
-      return { success: false, error: 'Could not create a room. Please try again.' }
-    }
-
-    // The host plays too: same players row joinRoom creates.
-    const player = await tools.create(
-      'players',
-      { roomId, userId, displayName: await displayNameFor(tools, userId), score: 0 },
-      memberRecordId(roomId, userId),
+    // First step for the progress list; the job advances it. The sample
+    // skips straight to 'lobby', so it has none.
+    const opened = await createHostedRoom(
+      tools,
+      userId,
+      roomId,
+      request.kind === 'sample'
+        ? {}
+        : { generationStep: stepValue(request.kind === 'topic' ? 'topic' : 'link', 'searching') },
     )
-    if (!player.success) {
-      console.error(`[createRoom] host player row failed for room ${roomId}: ${player.error}`)
-      await failRoom(tools, roomId, setupFailed)
-      return { success: false, error: 'Could not create a room. Please try again.' }
-    }
+    if (!opened.ok) return { success: false, error: opened.error }
+    const { code } = opened
 
     // 3a. "Try it yourself": the real pipeline with fake scrape/generate, inline.
     if (request.kind === 'sample') {
@@ -382,6 +454,82 @@ export const actions: Record<string, ActionHandler<Env>> = {
   },
 
   /**
+   * Play today's Quiz of the Day (New York date, src/lib/daily.ts). The
+   * caller gets their own solo room (host and only player, nobody can join)
+   * in 'lobby', with copies of the day's answer keys. Rounds and scoring are
+   * the normal ones; openQuestion records the result when it finishes.
+   *
+   * One attempt per person per day: a caller who already has a daily_plays
+   * row for today gets that room back (to resume or see the result). The
+   * row's roomId is immutable, so of two concurrent calls only one room
+   * counts; the other room is marked 'failed' and the counted one returned.
+   */
+  playDailyQuiz: async ({ userId, tools }) => {
+    const day = dailyDay(Date.now())
+    const playId = dailyPlayId(day, userId)
+    const existing = await getData<{ roomId: string }>(tools, 'daily_plays', playId)
+    if (existing) return { success: true, data: { roomId: existing.roomId, day, alreadyPlayed: true } }
+
+    const daily = await loadDailyQuiz(tools, day)
+    if (!daily) return { success: false, error: "Today's quiz isn't ready yet. Please check back soon." }
+
+    // Keep the caller's active memberships few (SDK read-query limit).
+    await retireOldMemberships(tools, userId)
+
+    const roomId = crypto.randomUUID()
+    const opened = await createHostedRoom(tools, userId, roomId, { dailyDay: day })
+    if (!opened.ok) return { success: false, error: opened.error }
+    const stored = await finishGeneration(tools, roomId, daily.result, daily.sourceUrl || undefined)
+    if (stored?.status !== 'lobby') return { success: false, error: 'Could not start the quiz. Please try again.' }
+
+    // Claim today's one attempt for this room.
+    const claimed = await tools.create(
+      'daily_plays',
+      { day, userId, roomId, status: 'playing', score: 0 },
+      playId,
+    )
+    if (!claimed.success) {
+      await failRoom(tools, roomId, 'Could not set up this room. Please try again.')
+      if (isImmutableRejection(claimed.error)) {
+        // A concurrent call won: return its room.
+        const winner = await getData<{ roomId: string }>(tools, 'daily_plays', playId)
+        if (winner) return { success: true, data: { roomId: winner.roomId, day, alreadyPlayed: true } }
+      }
+      console.error(`[playDailyQuiz] ${day}: claim failed: ${claimed.error}`)
+      return { success: false, error: 'Could not start the quiz. Please try again.' }
+    }
+    return { success: true, data: { roomId, day, alreadyPlayed: false } }
+  },
+
+  /**
+   * Local dev and tests only (refused unless ALLOW_DEBUG_ROUTES is "true",
+   * which `deepspace dev`/`test` set and deploys don't): make today's Quiz of
+   * the Day from the free sample fixture if it isn't ready, since specs may
+   * not call real integrations and the cron skips generation locally.
+   *
+   * `{ reset: true }` first deletes today's daily_quizzes, daily_stats and
+   * every daily_plays row, so a spec can play a first attempt on every run.
+   */
+  devSeedDailyQuiz: async ({ userId, params, tools, env }) => {
+    if (env.ALLOW_DEBUG_ROUTES !== 'true') return { success: false, error: 'Not available.' }
+    const day = dailyDay(Date.now())
+    if (params.reset === true) {
+      await tools.deleteWhere('daily_plays', { day }, 500)
+      await tools.remove('daily_stats', day)
+      await tools.remove('daily_quizzes', day)
+    }
+    const quiz = await getData<DailyQuizData>(tools, 'daily_quizzes', day)
+    if (quiz?.status === 'ready') return { success: true, data: { day, seeded: false } }
+
+    const source = await createDailySourceRoom(tools, day, (quiz?.attempts ?? 0) + 1, userId)
+    if (!source) return { success: false, error: 'Could not seed the daily quiz.' }
+    const result = await runQuestionPipeline('sample', SAMPLE_PIPELINE_DEPS, 'link')
+    const finished = await finishGeneration(tools, source.roomId, result)
+    await recordDailyGeneration(tools, day, source.roomId, finished?.status ?? null)
+    return { success: true, data: { day, seeded: true } }
+  },
+
+  /**
    * Join a room by code. A user who is already a member (host or player) gets
    * their room back whatever its status, so a rejoin or refresh always works.
    * Only new players are limited to rooms in 'lobby'.
@@ -410,6 +558,8 @@ export const actions: Record<string, ActionHandler<Env>> = {
     }
     const room = (found.data as QueryActionData).records[0]
     if (!room) return { success: false, error: 'No room with that code.' }
+    // Quiz of the Day rooms are solo: nobody joins them by code.
+    if (room.data.dailyDay) return { success: false, error: 'No room with that code.' }
     const roomId = room.recordId
 
     // 1. Existing member? Return the room regardless of its status.
@@ -486,6 +636,11 @@ export const actions: Record<string, ActionHandler<Env>> = {
     const key = await getData<AnswerKeyData>(tools, 'answerKeys', questionId)
     if (!key) {
       // No more questions (a real lookup error is logged inside getData).
+      // A Quiz of the Day room records the score and updates the day's
+      // stats first, so a failed write can be retried with Next.
+      if (room.dailyDay && !(await recordDailyFinish(tools, room.dailyDay, roomId, room.hostId))) {
+        return { success: false, error: 'Could not save your result. Please try again.' }
+      }
       const finished = await tools.update('rooms', roomId, { status: 'finished' })
       if (!finished.success) {
         console.error(`[openQuestion] room ${roomId}: finish failed: ${finished.error}`)

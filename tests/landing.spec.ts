@@ -19,7 +19,7 @@ test.describe('Landing (signed out)', () => {
 
     await expect(page.getByRole('link', { name: 'Create a room' })).toHaveAttribute('href', '/create')
     await expect(page.getByRole('link', { name: 'Join a room' })).toHaveAttribute('href', '/join')
-    await expect(page.getByRole('link', { name: 'Play a sample game →' })).toHaveAttribute('href', '/home')
+    await expect(page.getByRole('link', { name: 'Play the quiz of the day →' })).toHaveAttribute('href', '/daily')
   })
 
   test('"Create a room" leads to the sign-in panel on /create', async ({ page }) => {
@@ -36,10 +36,15 @@ test.describe('Landing (signed out)', () => {
     await expectSignInPanel(page)
   })
 
-  test('"Play a sample game" leads to the sign-in panel on /home, with no Try-it button', async ({ page }) => {
+  test('"Play the quiz of the day" leads to the sign-in panel on /daily', async ({ page }) => {
     await page.goto('/')
-    await page.getByRole('link', { name: 'Play a sample game →' }).click()
-    await expect(page).toHaveURL(/\/home$/)
+    await page.getByRole('link', { name: 'Play the quiz of the day →' }).click()
+    await expect(page).toHaveURL(/\/daily$/)
+    await expectSignInPanel(page)
+  })
+
+  test('/home shows the sign-in panel and no Try-it button when signed out', async ({ page }) => {
+    await page.goto('/home')
     await expectSignInPanel(page)
     await expect(page.getByRole('button', { name: 'Try it yourself' })).toHaveCount(0)
   })

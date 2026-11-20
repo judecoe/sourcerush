@@ -18,6 +18,31 @@ export type Room = {
   answeredCount?: number
   /** `${kind}:${step}` while generating (src/lib/generation-steps.ts). Display only. */
   generationStep?: string
+  /** New York date on Quiz of the Day rooms; empty otherwise. */
+  dailyDay?: string
+}
+
+/** Public summary of one day's Quiz of the Day (daily_stats). */
+export type DailyStats = {
+  day: string
+  status: 'preparing' | 'ready' | 'unavailable'
+  title?: string
+  questionCount?: number
+  averageScore?: number
+  stdDev?: number
+}
+
+/** The caller's own attempt (daily_plays). Nobody else's is synced. */
+export type DailyPlay = {
+  day: string
+  userId: string
+  roomId: string
+  status: 'playing' | 'finished'
+  score?: number
+  /** The day's average and spread just before this player finished. */
+  averageAtFinish?: number
+  stdDevAtFinish?: number
+  finishedAt?: number
 }
 
 export type Player = {

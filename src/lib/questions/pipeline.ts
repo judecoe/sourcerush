@@ -76,12 +76,14 @@ function errorText(err: unknown): string {
 
 /**
  * `kind` picks the prompt: 'link' when the host chose the article, 'topic'
- * when a search found it (see buildQuestionPrompt). Nothing else depends on it.
+ * when a search found it (see buildQuestionPrompt). `everyday` (Quiz of the
+ * Day only) adds the plain-language rule. Nothing else depends on them.
  */
 export async function runQuestionPipeline(
   url: string,
   deps: PipelineDeps,
   kind: SourceKind,
+  everyday = false,
 ): Promise<PipelineResult> {
   const log: string[] = []
   function fail(userMessage: UserMessage, line: string): PipelineResult {
@@ -110,7 +112,7 @@ export async function runQuestionPipeline(
     )
   }
   const source = { title: scraped.title.trim() || url, text }
-  const { system, user, sourceUsed } = buildQuestionPrompt(source, kind)
+  const { system, user, sourceUsed } = buildQuestionPrompt(source, kind, everyday)
 
   // 3. Generate; regenerate once if too few questions pass or the output
   //    doesn't parse. A failed call is not retried (it may be out of credits).

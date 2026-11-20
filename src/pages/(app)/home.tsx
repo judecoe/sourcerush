@@ -1,9 +1,11 @@
 /**
- * /home: the signed-in hub. Create a room, join one, or try the sample.
+ * /home: the signed-in hub. The Quiz of the Day card (today's numbers and a
+ * link to /daily), then create a room, join one, or try the sample.
  *
  * Every sign-in lands here: Google/GitHub sign-in always redirects to /home
- * (src/server/http-routes.ts, oauth-complete), and the landing page's
- * "Play a sample game →" links here so email sign-in ends up on the same page.
+ * (src/server/http-routes.ts, oauth-complete), which is why the Quiz of the
+ * Day card is here: the landing page links to /daily, but a Google/GitHub
+ * sign-in from there lands on /home.
  *
  * The page is public (it sits under (app)/, not (protected)/), so it gates
  * itself with the same AuthGate + SignedOutPanel the protected pages use.
@@ -14,6 +16,7 @@ import { Link } from 'react-router-dom'
 import { AuthGate } from 'deepspace'
 import { buttonVariants } from '@/components/ui'
 import { SignedOutPanel } from '@/components/SignedOutPanel'
+import { DailyCard } from '@/components/game/DailyCard'
 import { ReturnToRoomLink } from '@/components/game/ReturnToRoomLink'
 import { TryItYourselfButton } from '@/components/game/TryItYourselfButton'
 
@@ -23,6 +26,7 @@ export default function HomePage() {
       <div className="min-h-full text-foreground">
         <div className="mx-auto max-w-md px-4 py-12">
           <ReturnToRoomLink />
+          <DailyCard />
           <h1 className="mb-2 text-3xl font-bold tracking-tight">Start a game</h1>
           <p className="mb-8 text-sm text-muted-foreground">
             Host one from an article, join with a code, or play a short sample on your own.

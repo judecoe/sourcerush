@@ -6,10 +6,10 @@
  * Keep it that way: no auth, record or mutation hooks here, and no action
  * calls. Every action on this page is a plain link.
  *
- * "Play a sample game →" links to /home, not /create: Google/GitHub sign-in always
- * lands on /home, so linking there means email and OAuth sign-in end up on
- * the same page, where the visitor presses the Try-it button. Loading a page
- * never creates a room.
+ * "Play the quiz of the day →" links to /daily. Email sign-in happens in
+ * place and stays there; Google/GitHub sign-in always lands on /home, which
+ * shows the Quiz of the Day card linking to /daily. Loading a page never
+ * creates a room.
  *
  * Top-level pages are also prerendered to static HTML at build
  * (prerender.ts, via vite.config.ts) so crawlers read real content.
@@ -53,10 +53,10 @@ export default function Landing() {
         </div>
 
         <div className="animate-enter-hero enter-delay-1 mt-8 border-t border-border pt-6">
-          <Link to="/home" className={buttonVariants({ variant: 'outline', className: 'w-full' })}>
-            Play a sample game →
+          <Link to="/daily" className={buttonVariants({ variant: 'outline', className: 'w-full' })}>
+            Play the quiz of the day →
           </Link>
-          <p className="mt-2 text-sm text-muted-foreground">A short sample article. Play it on your own.</p>
+          <p className="mt-2 text-sm text-muted-foreground">A new quiz every day. See how you compare with everyone else.</p>
         </div>
 
         <h2 className="animate-enter-hero enter-delay-2 mb-3 mt-10 text-lg font-semibold">How it works</h2>

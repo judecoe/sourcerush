@@ -45,6 +45,7 @@ import {
   setGenerationStep,
   type GenerateJobPayload,
 } from './server/generation.js'
+import { recordDailyGeneration } from './server/daily.js'
 
 /** True if the room exists, belongs to `hostId`, and is still 'generating'. */
 async function stillGenerating(tools: ActionTools, roomId: string, hostId: string): Promise<boolean> {
@@ -79,11 +80,12 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
       const found = await searchArticle(tools, roomId, payload.topic)
       if (!found.ok) {
         if (!(await stillGenerating(tools, roomId, hostId))) return
-        await finishGeneration(tools, roomId, {
+        const failed = await finishGeneration(tools, roomId, {
           ok: false,
           userMessage: found.noneFound ? USER_MESSAGES.noArticleFound : USER_MESSAGES.serviceUnavailable,
           log: [`search: ${found.log}`],
         })
+        if (payload.dailyDay) await recordDailyGeneration(tools, payload.dailyDay, roomId, failed?.status ?? null)
         return
       }
       url = found.url
@@ -112,6 +114,8 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
         },
       },
       kind,
+      // Quiz of the Day: plain, everyday questions anyone can have a go at.
+      payload.dailyDay !== undefined,
     )
     // A topic room's host never chose the page, so "that page" messages are reworded.
     const result = payload.topic !== undefined ? topicRoomResult(pipelineResult) : pipelineResult
@@ -120,6 +124,8 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
     if (!(await stillGenerating(tools, roomId, hostId))) return
     if (result.ok) await setGenerationStep(tools, roomId, stepValue(kind, 'saving'))
     const finished = await finishGeneration(tools, roomId, result, url)
+    // A Quiz of the Day source room: mark the day ready, or this attempt failed.
+    if (payload.dailyDay) await recordDailyGeneration(tools, payload.dailyDay, roomId, finished?.status ?? null)
     console.info(`[generate] room ${roomId}: done in ${Date.now() - started} ms -> ${finished?.status ?? 'status write failed'}`)
   } catch (err) {
     console.error(`[generate] room ${roomId}: job error: ${err instanceof Error ? err.message : String(err)}`)
@@ -128,6 +134,7 @@ export async function runJob(job: Job, _ctx: JobContext, env: Env): Promise<void
     // "taking longer than expected" message covers it.
     if (await stillGenerating(tools, roomId, hostId).catch(() => false)) {
       await failRoom(tools, roomId, USER_MESSAGES.serviceUnavailable)
+      if (payload.dailyDay) await recordDailyGeneration(tools, payload.dailyDay, roomId, 'failed')
     }
   }
 }

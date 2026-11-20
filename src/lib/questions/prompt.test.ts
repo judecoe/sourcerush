@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { FIXTURE_SOURCE } from './fixtures'
-import { buildQuestionPrompt, DIFFICULTY_RAMP, QUESTIONS_REQUESTED } from './prompt'
+import { buildQuestionPrompt, DIFFICULTY_RAMP, EVERYDAY_RULE, QUESTIONS_REQUESTED } from './prompt'
 
 const link = buildQuestionPrompt(FIXTURE_SOURCE, 'link')
 const topic = buildQuestionPrompt(FIXTURE_SOURCE, 'topic')
@@ -43,5 +43,13 @@ describe('buildQuestionPrompt', () => {
   it('the kind does not change the source the model sees', () => {
     expect(topic.sourceUsed).toBe(link.sourceUsed)
     expect(topic.user.slice(topic.user.indexOf('<source'))).toBe(link.user.slice(link.user.indexOf('<source')))
+  })
+})
+
+describe('everyday rule (Quiz of the Day)', () => {
+  it('is only in the prompt when asked for', () => {
+    expect(buildQuestionPrompt(FIXTURE_SOURCE, 'topic', true).system).toContain(EVERYDAY_RULE)
+    expect(buildQuestionPrompt(FIXTURE_SOURCE, 'topic').system).not.toContain(EVERYDAY_RULE)
+    expect(buildQuestionPrompt(FIXTURE_SOURCE, 'link').system).not.toContain(EVERYDAY_RULE)
   })
 })

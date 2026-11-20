@@ -19,6 +19,9 @@ import { sourcesSchema } from './schemas/sources-schema'
 import { submissionsSchema } from './schemas/submissions-schema'
 import { revealLocksSchema } from './schemas/reveal-locks-schema'
 import { roomQuotaSchema } from './schemas/room-quota-schema'
+import { dailyQuizzesSchema } from './schemas/daily-quizzes-schema'
+import { dailyStatsSchema } from './schemas/daily-stats-schema'
+import { dailyPlaysSchema } from './schemas/daily-plays-schema'
 
 export const schemas: CollectionSchema[] = [
   usersSchema,
@@ -32,4 +35,7 @@ export const schemas: CollectionSchema[] = [
   submissionsSchema,
   revealLocksSchema,
   roomQuotaSchema,
+  dailyQuizzesSchema,
+  dailyStatsSchema,
+  dailyPlaysSchema,
 ]

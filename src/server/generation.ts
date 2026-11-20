@@ -33,9 +33,13 @@ export const GENERATE_MAX_TOKENS = 12_000
 
 export const GENERATE_JOB_TYPE = 'generate-questions'
 /** Exactly one of `url` (a pasted link) or `topic` (search for an article first). */
-export type GenerateJobPayload =
+export type GenerateJobPayload = (
   | { roomId: string; hostId: string; url: string; topic?: undefined }
   | { roomId: string; hostId: string; topic: string; url?: undefined }
+) & {
+  /** Set on a Quiz of the Day source room: the job then reports to src/server/daily.ts. */
+  dailyDay?: string
+}
 
 /** How many Exa results to look through for a usable link. */
 export const SEARCH_NUM_RESULTS = 5

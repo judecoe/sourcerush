@@ -35,6 +35,10 @@ export const roomsSchema: CollectionSchema = {
     // Epoch milliseconds, server clock. Empty until a question is open.
     { name: 'endsAt', storage: 'number', interpretation: 'plain' },
     { name: 'answeredCount', storage: 'number', interpretation: 'plain', default: 0 },
+    // Set (to the New York date) on Quiz of the Day rooms: the cron's source
+    // room and each player's solo room. joinRoom refuses these rooms, and
+    // openQuestion records the result when one finishes. Empty otherwise.
+    { name: 'dailyDay', storage: 'text', interpretation: 'plain', immutable: true },
     // Display only: where question generation is while status is
     // 'generating' (`${kind}:${step}`, src/lib/generation-steps.ts). Set by
     // createRoom and the job; an enum, never the topic, URL or article text.
