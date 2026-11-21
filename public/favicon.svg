@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- SourceRush logo: a source page with a lightning bolt, rushing forward. Colors from src/styles.css. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12213d"/>
+      <stop offset="1" stop-color="#0b1426"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <!-- speed lines -->
+  <g stroke="#5cd6ea" stroke-width="4" stroke-linecap="round">
+    <line x1="7" y1="24" x2="15" y2="24" opacity="0.55"/>
+    <line x1="4" y1="33" x2="15" y2="33"/>
+    <line x1="7" y1="42" x2="15" y2="42" opacity="0.55"/>
+  </g>
+  <!-- the page, with a folded corner -->
+  <path d="M23 9h18l12 12v31a3 3 0 0 1-3 3H23a3 3 0 0 1-3-3V12a3 3 0 0 1 3-3z" fill="#5cd6ea"/>
+  <path d="M41 9v9a3 3 0 0 0 3 3h9z" fill="#2f9fb3"/>
+  <!-- the bolt -->
+  <path d="M39 20 26 38h8l-4 13 14-19h-8l3-12z" fill="#0b1426"/>
+</svg>
