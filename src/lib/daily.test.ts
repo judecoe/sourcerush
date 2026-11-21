@@ -7,6 +7,7 @@ import {
   baselineAverage,
   bellCurvePoints,
   DAILY_MAX_ATTEMPTS,
+  DAILY_BACKUP_TOPICS,
   DAILY_ROTATION_START,
   DAILY_STALE_MS,
   DAILY_TOPICS,
@@ -36,6 +37,15 @@ describe('DAILY_TOPICS', () => {
     expect(new Set(DAILY_TOPICS.map((t) => t.toLowerCase())).size).toBe(180)
     for (const t of DAILY_TOPICS) expect(t.trim().length).toBeGreaterThan(3)
   })
+  it('has distinct backup topics that are not in the main rotation', () => {
+    const main = new Set(DAILY_TOPICS.map((t) => t.toLowerCase()))
+    const backups = DAILY_BACKUP_TOPICS.map((t) => t.toLowerCase())
+    expect(new Set(backups).size).toBe(backups.length)
+    for (const t of backups) expect(main.has(t)).toBe(false)
+    for (const t of DAILY_BACKUP_TOPICS) expect(t.trim().length).toBeGreaterThan(3)
+    // Enough that one day's backups never overlap the next day's.
+    expect(DAILY_BACKUP_TOPICS.length).toBeGreaterThanOrEqual(2 * (DAILY_MAX_ATTEMPTS - 1))
+  })
 })
 
 describe('topicForDay', () => {
@@ -49,9 +59,23 @@ describe('topicForDay', () => {
     expect(topicForDay(plus(180), 1)).toBe(DAILY_TOPICS[0])
     expect(topicForDay(plus(361), 1)).toBe(DAILY_TOPICS[1])
   })
-  it('a retry uses the next topic', () => {
-    expect(topicForDay(DAILY_ROTATION_START, 2)).toBe(DAILY_TOPICS[1])
-    expect(topicForDay(plus(179), 2)).toBe(DAILY_TOPICS[0])
+  it('a retry uses a backup topic, in order, two per day', () => {
+    expect(topicForDay(DAILY_ROTATION_START, 2)).toBe(DAILY_BACKUP_TOPICS[0])
+    expect(topicForDay(DAILY_ROTATION_START, 3)).toBe(DAILY_BACKUP_TOPICS[1])
+    expect(topicForDay(plus(1), 2)).toBe(DAILY_BACKUP_TOPICS[2])
+    expect(topicForDay(plus(1), 3)).toBe(DAILY_BACKUP_TOPICS[3])
+  })
+  it('a retry never repeats the next day’s topic (the 2026-11-20/21 pizza repeat)', () => {
+    expect(topicForDay('2026-11-20', 2)).not.toBe(topicForDay('2026-11-21', 1))
+    for (let d = -5; d < 400; d++) {
+      for (let attempt = 2; attempt <= DAILY_MAX_ATTEMPTS; attempt++) {
+        const retry = topicForDay(plus(d), attempt)
+        expect(DAILY_BACKUP_TOPICS).toContain(retry)
+        expect(retry).not.toBe(topicForDay(plus(d + 1), 1))
+        // Nor a backup the next day could use.
+        for (let next = 2; next <= DAILY_MAX_ATTEMPTS; next++) expect(retry).not.toBe(topicForDay(plus(d + 1), next))
+      }
+    }
   })
   it('stays in range across DST changes and before the start date', () => {
     expect(topicForDay('2027-03-15', 1)).toBe(DAILY_TOPICS[116])

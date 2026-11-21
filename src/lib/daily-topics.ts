@@ -199,3 +199,44 @@ export const DAILY_TOPICS = [
   'the history of the bathtub',
   'the history of the stapler',
 ] as const
+
+/**
+ * Backup topics, used only when a day's first attempt fails (attempts 2
+ * and 3, see topicForDay in src/lib/daily.ts). They are kept separate from
+ * DAILY_TOPICS so a retry never takes a topic that another day is scheduled
+ * to use. Broad, well-covered subjects, so the search is likely to find a
+ * long enough article. Must not repeat anything in DAILY_TOPICS (a unit test
+ * checks this).
+ */
+export const DAILY_BACKUP_TOPICS = [
+  'how volcanoes erupt',
+  'the history of the printing press',
+  'how bridges are built',
+  'how earthquakes happen',
+  'the history of the Eiffel Tower',
+  'how solar panels work',
+  'the history of the piano',
+  'how hurricanes form',
+  'the history of the guitar',
+  'how bones grow',
+  'the history of the hot air balloon',
+  'how coral reefs form',
+  'the history of the circus',
+  'how glass is made',
+  'the history of soap',
+  'how paper is made',
+  'how compasses work',
+  'the history of the Statue of Liberty',
+  'how ocean tides work',
+  'the history of the lighthouse',
+  'how cotton becomes cloth',
+  'the history of the Great Wall of China',
+  'how sharks hunt',
+  'how glaciers move',
+  'the history of the radio',
+  'how octopuses change color',
+  'the history of the pyramids of Egypt',
+  'how wind turbines make electricity',
+  'the history of the postage stamp',
+  'how rainforests work',
+] as const

@@ -1,6 +1,6 @@
-import { DAILY_TOPICS } from './daily-topics'
+import { DAILY_BACKUP_TOPICS, DAILY_TOPICS } from './daily-topics'
 
-export { DAILY_TOPICS }
+export { DAILY_BACKUP_TOPICS, DAILY_TOPICS }
 
 /**
  * Pure helpers for the Quiz of the Day. No SDK calls here, so the unit
@@ -45,18 +45,27 @@ export function dailyDay(nowMs: number): string {
   }).format(new Date(nowMs))
 }
 
+/** `i` wrapped into 0..n-1, also for negative `i` (days before the start). */
+function wrapIndex(i: number, n: number): number {
+  return ((i % n) + n) % n
+}
+
 /**
- * The topic for a day's nth attempt (1-based): days walk through
- * DAILY_TOPICS in order from DAILY_ROTATION_START and wrap around at the end.
- * A retry moves on to the next topic, since the last one failed (it is the
- * same topic the next day will use).
+ * The topic for a day's nth attempt (1-based).
+ *
+ * - Attempt 1: days walk through DAILY_TOPICS in order from
+ *   DAILY_ROTATION_START and wrap around at the end.
+ * - Retries (attempt 2 and up): a topic from DAILY_BACKUP_TOPICS instead, so
+ *   a retry never takes the topic the next day is scheduled to use. Each day
+ *   gets its own (DAILY_MAX_ATTEMPTS - 1) backups in a row of the list, so
+ *   two days in a row never share a backup either.
  */
 export function topicForDay(day: string, attempt: number): string {
   const daysSinceStart = Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${DAILY_ROTATION_START}T00:00:00Z`)) / 86_400_000)
-  const n = DAILY_TOPICS.length
-  // ((x % n) + n) % n keeps the index in range for days before the start too.
-  const index = (((daysSinceStart + attempt - 1) % n) + n) % n
-  return DAILY_TOPICS[index]
+  if (attempt <= 1) return DAILY_TOPICS[wrapIndex(daysSinceStart, DAILY_TOPICS.length)]
+  const retriesPerDay = DAILY_MAX_ATTEMPTS - 1
+  const backupIndex = daysSinceStart * retriesPerDay + (attempt - 2)
+  return DAILY_BACKUP_TOPICS[wrapIndex(backupIndex, DAILY_BACKUP_TOPICS.length)]
 }
 
 export type DailyQuizState = { status: 'generating' | 'ready' | 'failed'; attempts: number; startedAt: number }
